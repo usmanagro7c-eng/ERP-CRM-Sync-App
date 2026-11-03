@@ -168,3 +168,92 @@ def handle_item_webhook():
         tb = traceback.format_exc()
         log_event("Item Sync", "ERP to CRM", "Error", "Item", "", data, str(e), tb)
         return {"status": "error", "message": str(e)}
+
+
+@frappe.whitelist(allow_guest=True)
+def handle_quotation_webhook():
+    data = None
+    try:
+        data = parse_request_data()
+        if not data:
+            return {"status": "ignored"}
+
+        qtn_name = data.get("name")
+        crm_deal = data.get("crm_deal")
+        grand_total = data.get("grand_total") or 0.0
+        docstatus = data.get("docstatus", 0)
+
+        # If crm_deal not in data directly, look up customer's crm_deal
+        if not crm_deal and data.get("party_name"):
+            crm_deal = frappe.db.get_value("CRM Deal", {"erpnext_customer": data.get("party_name")}, "name")
+
+        if crm_deal and frappe.db.exists("CRM Deal", crm_deal):
+            status_text = "Submitted" if docstatus == 1 else "Draft"
+            comment = f"ERPNext Quotation {qtn_name} ({status_text}) updated: Grand Total PKR {grand_total:,.2f}"
+            deal_doc = frappe.get_doc("CRM Deal", crm_deal)
+            deal_doc.add_comment("Comment", comment)
+
+            # If deal is still in early stage, move to Proposal/Quotation
+            if deal_doc.status == "Qualification" and docstatus == 1:
+                deal_doc.status = "Proposal/Quotation"
+                deal_doc.save(ignore_permissions=True)
+
+            log_event("Quotation Sync", "ERP to CRM", "Success", "Quotation", qtn_name, data)
+            return {"status": "success", "deal": crm_deal}
+
+        log_event("Quotation Sync", "ERP to CRM", "Success", "Quotation", qtn_name, data, "No linked CRM deal found")
+        return {"status": "ignored", "message": "No linked deal"}
+    except Exception as e:
+        tb = traceback.format_exc()
+        log_event("Quotation Sync", "ERP to CRM", "Error", "Quotation", "", data, str(e), tb)
+        return {"status": "error", "message": str(e)}
+
+
+@frappe.whitelist(allow_guest=True)
+def handle_sales_order_webhook():
+    data = None
+    try:
+        data = parse_request_data()
+        if not data:
+            return {"status": "ignored"}
+
+        so_name = data.get("name")
+        customer = data.get("customer")
+        grand_total = data.get("grand_total") or 0.0
+        docstatus = data.get("docstatus", 0)
+
+        crm_deal = None
+        # Try finding via customer
+        if customer:
+            crm_deal = frappe.db.get_value("CRM Deal", {"erpnext_customer": customer}, "name")
+
+        if crm_deal and frappe.db.exists("CRM Deal", crm_deal):
+            deal_doc = frappe.get_doc("CRM Deal", crm_deal)
+            status_text = "Submitted" if docstatus == 1 else "Draft"
+            comment = f"Sales Order {so_name} ({status_text}) placed on ERPNext for PKR {grand_total:,.2f}"
+            deal_doc.add_comment("Comment", comment)
+
+            # If Sales Order submitted, ensure deal is Won
+            if docstatus == 1 and deal_doc.status != "Won":
+                deal_doc.status = "Won"
+                deal_doc.annual_revenue = grand_total
+                deal_doc.save(ignore_permissions=True)
+
+            log_event("Sales Order Sync", "ERP to CRM", "Success", "Sales Order", so_name, data)
+            return {"status": "success", "deal": crm_deal}
+
+        log_event("Sales Order Sync", "ERP to CRM", "Success", "Sales Order", so_name, data, "No linked CRM deal found")
+        return {"status": "ignored", "message": "No linked deal"}
+    except Exception as e:
+        tb = traceback.format_exc()
+        log_event("Sales Order Sync", "ERP to CRM", "Error", "Sales Order", "", data, str(e), tb)
+        return {"status": "error", "message": str(e)}
+
+
+def sync_recent_items():
+    try:
+        settings = frappe.get_single("Custom CRM Sync Settings")
+        if settings.enabled and settings.auto_sync_items:
+            pull_all_items()
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Scheduled item sync failed")
