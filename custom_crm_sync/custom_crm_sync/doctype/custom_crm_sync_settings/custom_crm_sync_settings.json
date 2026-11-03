@@ -1,0 +1,114 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-11-03 14:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled",
+  "section_erpnext_connection",
+  "erpnext_url",
+  "api_key",
+  "api_secret",
+  "webhook_secret",
+  "section_sync_rules",
+  "auto_sync_items",
+  "auto_sync_quotations",
+  "auto_sync_sales_orders",
+  "section_status",
+  "last_item_sync"
+ ],
+ "fields": [
+  {
+   "default": "1",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled"
+  },
+  {
+   "fieldname": "section_erpnext_connection",
+   "fieldtype": "Section Break",
+   "label": "ERPNext Site Connection"
+  },
+  {
+   "default": "https://erp_site.pk",
+   "fieldname": "erpnext_url",
+   "fieldtype": "Data",
+   "label": "ERPNext Site URL",
+   "reqd": 1
+  },
+  {
+   "fieldname": "api_key",
+   "fieldtype": "Data",
+   "label": "API Key",
+   "reqd": 1
+  },
+  {
+   "fieldname": "api_secret",
+   "fieldtype": "Password",
+   "label": "API Secret",
+   "reqd": 1
+  },
+  {
+   "fieldname": "webhook_secret",
+   "fieldtype": "Data",
+   "label": "Webhook Shared Secret"
+  },
+  {
+   "fieldname": "section_sync_rules",
+   "fieldtype": "Section Break",
+   "label": "Sync Rules"
+  },
+  {
+   "default": "1",
+   "fieldname": "auto_sync_items",
+   "fieldtype": "Check",
+   "label": "Auto Sync Items to CRM Products"
+  },
+  {
+   "default": "1",
+   "fieldname": "auto_sync_quotations",
+   "fieldtype": "Check",
+   "label": "Auto Sync Quotations to Deals"
+  },
+  {
+   "default": "1",
+   "fieldname": "auto_sync_sales_orders",
+   "fieldtype": "Check",
+   "label": "Auto Sync Sales Orders to Deals"
+  },
+  {
+   "fieldname": "section_status",
+   "fieldtype": "Section Break",
+   "label": "Status"
+  },
+  {
+   "fieldname": "last_item_sync",
+   "fieldtype": "Datetime",
+   "label": "Last Item Sync Time",
+   "read_only": 1
+  }
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-11-03 14:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Custom CRM Sync",
+ "name": "Custom CRM Sync Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
