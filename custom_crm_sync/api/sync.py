@@ -129,3 +129,42 @@ def pull_all_items():
 
     log_event("Item Sync", "ERP to CRM", "Success", "Item", f"Total: {synced}", {"synced_count": synced})
     return {"synced_count": synced}
+
+
+def parse_request_data():
+    try:
+        raw = frappe.request.get_data(as_text=True)
+        if raw and raw.strip():
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict) and any(k != "cmd" for k in parsed.keys()):
+                return parsed
+    except Exception:
+        pass
+
+    try:
+        data = frappe.request.get_json()
+        if data and isinstance(data, dict) and any(k != "cmd" for k in data.keys()):
+            return data
+    except Exception:
+        pass
+
+    data = dict(frappe.form_dict)
+    data.pop("cmd", None)
+    return data
+
+
+@frappe.whitelist(allow_guest=True)
+def handle_item_webhook():
+    data = None
+    try:
+        data = parse_request_data()
+        if not data or not (data.get("item_code") or data.get("name")):
+            return {"status": "ignored", "message": "No item data received"}
+
+        product_name = upsert_crm_product(data)
+        log_event("Item Sync", "ERP to CRM", "Success", "CRM Product", product_name, data)
+        return {"status": "success", "product": product_name}
+    except Exception as e:
+        tb = traceback.format_exc()
+        log_event("Item Sync", "ERP to CRM", "Error", "Item", "", data, str(e), tb)
+        return {"status": "error", "message": str(e)}
