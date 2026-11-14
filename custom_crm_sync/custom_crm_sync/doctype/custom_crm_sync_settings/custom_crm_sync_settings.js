@@ -21,5 +21,27 @@ frappe.ui.form.on("Custom CRM Sync Settings", {
                 }
             });
         });
+
+        frm.add_custom_button(__("Sync All Customers Now"), function() {
+            frappe.show_alert({
+                message: __("Starting full customer sync from ERPNext..."),
+                indicator: "blue"
+            });
+            frappe.call({
+                method: "custom_crm_sync.api.sync.pull_all_customers",
+                freeze: true,
+                freeze_message: __("Pulling Customers from ERPNext..."),
+                callback: function(r) {
+                    if (r.message) {
+                        frappe.msgprint({
+                            title: __("Customer Sync Complete"),
+                            message: __("Synced {0} customers to CRM Organizations.", [r.message.synced_count || 0]),
+                            indicator: "green"
+                        });
+                        frm.reload_doc();
+                    }
+                }
+            });
+        });
     }
 });

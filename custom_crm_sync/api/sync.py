@@ -257,3 +257,115 @@ def sync_recent_items():
             pull_all_items()
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Scheduled item sync failed")
+
+
+def ensure_remote_customer_field_defaults():
+    try:
+        client = get_erpnext_client()
+        need_update = False
+        cf1 = client.get_doc("Custom Field", "Customer-custom_tax_payer_type")
+        if not cf1.get("default"):
+            cf1["default"] = "Unregistered"
+            client.update(cf1)
+        cf2 = client.get_doc("Custom Field", "Customer-custom_buyer_province")
+        if not cf2.get("default"):
+            cf2["default"] = "PUNJAB"
+            client.update(cf2)
+    except Exception:
+        pass
+
+
+def upsert_crm_organization(cust_data):
+    cust_name = cust_data.get("customer_name") or cust_data.get("name")
+    if not cust_name:
+        return None
+
+    existing = frappe.db.get_value("CRM Organization", {"organization_name": cust_name}, ["name"], as_dict=True)
+    if not existing:
+        existing = frappe.db.get_value("CRM Organization", cust_name, ["name"], as_dict=True)
+
+    website = cust_data.get("website") or ""
+    currency = cust_data.get("default_currency") or "PKR"
+    territory = cust_data.get("territory") or ""
+    valid_crm_territory = territory if (territory and frappe.db.exists("CRM Territory", territory)) else None
+
+    if existing:
+        org = frappe.get_doc("CRM Organization", existing.name)
+        if website and not org.website:
+            org.website = website
+        if valid_crm_territory and not org.territory:
+            org.territory = valid_crm_territory
+        org.save(ignore_permissions=True)
+        return org.name
+    else:
+        org = frappe.new_doc("CRM Organization")
+        org.organization_name = cust_name
+        org.website = website
+        org.currency = currency
+        if valid_crm_territory:
+            org.territory = valid_crm_territory
+        org.insert(ignore_permissions=True)
+        return org.name
+
+
+@frappe.whitelist(allow_guest=True)
+def handle_customer_webhook():
+    data = None
+    try:
+        data = parse_request_data()
+        if not data or not (data.get("customer_name") or data.get("name")):
+            return {"status": "ignored", "message": "No customer data received"}
+
+        org_name = upsert_crm_organization(data)
+        log_event("Customer Sync", "ERP to CRM", "Success", "CRM Organization", org_name, data)
+        return {"status": "success", "organization": org_name}
+    except Exception as e:
+        tb = traceback.format_exc()
+        log_event("Customer Sync", "ERP to CRM", "Error", "Customer", "", data, str(e), tb)
+        return {"status": "error", "message": str(e)}
+
+
+@frappe.whitelist()
+def pull_all_customers():
+    settings = get_sync_settings()
+    ensure_remote_customer_field_defaults()
+
+    url = f"{settings.erpnext_url.rstrip('/')}/api/resource/Customer"
+    headers = {
+        "Authorization": f"token {settings.api_key}:{settings.get_password('api_secret')}"
+    }
+    params = {
+        "fields": json.dumps(["name", "customer_name", "customer_type", "customer_group", "territory", "default_currency", "website"]),
+        "limit_page_length": 0
+    }
+
+    resp = requests.get(url, headers=headers, params=params, timeout=30)
+    if resp.status_code != 200:
+        err = f"Failed to fetch customers from ERPNext: {resp.status_code} {resp.text}"
+        log_event("Customer Sync", "ERP to CRM", "Error", "Customer", "", None, err)
+        frappe.throw(err)
+
+    customers = resp.json().get("data", [])
+    synced = 0
+    for c in customers:
+        try:
+            upsert_crm_organization(c)
+            synced += 1
+        except Exception as e:
+            log_event("Customer Sync", "ERP to CRM", "Error", "Customer", c.get("name"), c, str(e), traceback.format_exc())
+
+    settings.last_customer_sync = now_datetime()
+    settings.save(ignore_permissions=True)
+    frappe.db.commit()
+
+    log_event("Customer Sync", "ERP to CRM", "Success", "Customer", f"Total: {synced}", {"synced_count": synced})
+    return {"synced_count": synced}
+
+
+def sync_recent_customers():
+    try:
+        settings = frappe.get_single("Custom CRM Sync Settings")
+        if settings.enabled and getattr(settings, "auto_sync_customers", 1):
+            pull_all_customers()
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Scheduled customer sync failed")

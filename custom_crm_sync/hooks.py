@@ -17,6 +17,7 @@ doctype_js = {
 # ---------------
 scheduler_events = {
     "hourly": [
-        "custom_crm_sync.api.sync.sync_recent_items"
+        "custom_crm_sync.api.sync.sync_recent_items",
+        "custom_crm_sync.api.sync.sync_recent_customers"
     ]
 }
