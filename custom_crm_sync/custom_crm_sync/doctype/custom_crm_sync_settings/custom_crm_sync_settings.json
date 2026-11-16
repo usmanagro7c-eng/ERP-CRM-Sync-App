@@ -13,12 +13,16 @@
   "webhook_secret",
   "section_sync_rules",
   "auto_sync_customers",
+  "auto_sync_contacts",
   "auto_sync_items",
   "auto_sync_quotations",
   "auto_sync_sales_orders",
   "section_status",
   "last_item_sync",
-  "last_customer_sync"
+  "last_customer_sync",
+  "last_contact_sync",
+  "last_quotation_sync",
+  "last_sales_order_sync"
  ],
  "fields": [
   {
@@ -100,6 +104,30 @@
    "fieldname": "last_customer_sync",
    "fieldtype": "Datetime",
    "label": "Last Customer Sync Time",
+   "read_only": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "auto_sync_contacts",
+   "fieldtype": "Check",
+   "label": "Auto Sync Contacts"
+  },
+  {
+   "fieldname": "last_contact_sync",
+   "fieldtype": "Datetime",
+   "label": "Last Contact Sync Time",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_quotation_sync",
+   "fieldtype": "Datetime",
+   "label": "Last Quotation Sync Time",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_sales_order_sync",
+   "fieldtype": "Datetime",
+   "label": "Last Sales Order Sync Time",
    "read_only": 1
   }
  ],

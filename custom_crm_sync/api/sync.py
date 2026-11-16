@@ -45,6 +45,32 @@ def log_event(event_type, direction, status, reference_doctype="", reference_nam
         frappe.log_error(frappe.get_traceback(), "Failed to create Custom CRM Sync Log")
 
 
+def parse_request_data():
+    try:
+        raw = frappe.request.get_data(as_text=True)
+        if raw and raw.strip():
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict) and any(k != "cmd" for k in parsed.keys()):
+                return parsed
+    except Exception:
+        pass
+
+    try:
+        data = frappe.request.get_json()
+        if data and isinstance(data, dict) and any(k != "cmd" for k in data.keys()):
+            return data
+    except Exception:
+        pass
+
+    data = dict(frappe.form_dict)
+    data.pop("cmd", None)
+    return data
+
+
+# ─────────────────────────────────────────────
+# ITEM SYNC  (ERPNext Item → CRM Product)
+# ─────────────────────────────────────────────
+
 def upsert_crm_product(item):
     item_code = item.get("name") or item.get("item_code")
     if not item_code:
@@ -131,28 +157,6 @@ def pull_all_items():
     return {"synced_count": synced}
 
 
-def parse_request_data():
-    try:
-        raw = frappe.request.get_data(as_text=True)
-        if raw and raw.strip():
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict) and any(k != "cmd" for k in parsed.keys()):
-                return parsed
-    except Exception:
-        pass
-
-    try:
-        data = frappe.request.get_json()
-        if data and isinstance(data, dict) and any(k != "cmd" for k in data.keys()):
-            return data
-    except Exception:
-        pass
-
-    data = dict(frappe.form_dict)
-    data.pop("cmd", None)
-    return data
-
-
 @frappe.whitelist(allow_guest=True)
 def handle_item_webhook():
     data = None
@@ -170,99 +174,22 @@ def handle_item_webhook():
         return {"status": "error", "message": str(e)}
 
 
-@frappe.whitelist(allow_guest=True)
-def handle_quotation_webhook():
-    data = None
-    try:
-        data = parse_request_data()
-        if not data:
-            return {"status": "ignored"}
-
-        qtn_name = data.get("name")
-        crm_deal = data.get("crm_deal")
-        grand_total = data.get("grand_total") or 0.0
-        docstatus = data.get("docstatus", 0)
-
-        # If crm_deal not in data directly, look up customer's crm_deal
-        if not crm_deal and data.get("party_name"):
-            crm_deal = frappe.db.get_value("CRM Deal", {"erpnext_customer": data.get("party_name")}, "name")
-
-        if crm_deal and frappe.db.exists("CRM Deal", crm_deal):
-            status_text = "Submitted" if docstatus == 1 else "Draft"
-            comment = f"ERPNext Quotation {qtn_name} ({status_text}) updated: Grand Total PKR {grand_total:,.2f}"
-            deal_doc = frappe.get_doc("CRM Deal", crm_deal)
-            deal_doc.add_comment("Comment", comment)
-
-            # If deal is still in early stage, move to Proposal/Quotation
-            if deal_doc.status == "Qualification" and docstatus == 1:
-                deal_doc.status = "Proposal/Quotation"
-                deal_doc.save(ignore_permissions=True)
-
-            log_event("Quotation Sync", "ERP to CRM", "Success", "Quotation", qtn_name, data)
-            return {"status": "success", "deal": crm_deal}
-
-        log_event("Quotation Sync", "ERP to CRM", "Success", "Quotation", qtn_name, data, "No linked CRM deal found")
-        return {"status": "ignored", "message": "No linked deal"}
-    except Exception as e:
-        tb = traceback.format_exc()
-        log_event("Quotation Sync", "ERP to CRM", "Error", "Quotation", "", data, str(e), tb)
-        return {"status": "error", "message": str(e)}
-
-
-@frappe.whitelist(allow_guest=True)
-def handle_sales_order_webhook():
-    data = None
-    try:
-        data = parse_request_data()
-        if not data:
-            return {"status": "ignored"}
-
-        so_name = data.get("name")
-        customer = data.get("customer")
-        grand_total = data.get("grand_total") or 0.0
-        docstatus = data.get("docstatus", 0)
-
-        crm_deal = None
-        # Try finding via customer
-        if customer:
-            crm_deal = frappe.db.get_value("CRM Deal", {"erpnext_customer": customer}, "name")
-
-        if crm_deal and frappe.db.exists("CRM Deal", crm_deal):
-            deal_doc = frappe.get_doc("CRM Deal", crm_deal)
-            status_text = "Submitted" if docstatus == 1 else "Draft"
-            comment = f"Sales Order {so_name} ({status_text}) placed on ERPNext for PKR {grand_total:,.2f}"
-            deal_doc.add_comment("Comment", comment)
-
-            # If Sales Order submitted, ensure deal is Won
-            if docstatus == 1 and deal_doc.status != "Won":
-                deal_doc.status = "Won"
-                deal_doc.annual_revenue = grand_total
-                deal_doc.save(ignore_permissions=True)
-
-            log_event("Sales Order Sync", "ERP to CRM", "Success", "Sales Order", so_name, data)
-            return {"status": "success", "deal": crm_deal}
-
-        log_event("Sales Order Sync", "ERP to CRM", "Success", "Sales Order", so_name, data, "No linked CRM deal found")
-        return {"status": "ignored", "message": "No linked deal"}
-    except Exception as e:
-        tb = traceback.format_exc()
-        log_event("Sales Order Sync", "ERP to CRM", "Error", "Sales Order", "", data, str(e), tb)
-        return {"status": "error", "message": str(e)}
-
-
 def sync_recent_items():
     try:
         settings = frappe.get_single("Custom CRM Sync Settings")
-        if settings.enabled and settings.auto_sync_items:
+        if settings.enabled and getattr(settings, "auto_sync_items", 1):
             pull_all_items()
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Scheduled item sync failed")
 
 
+# ─────────────────────────────────────────────
+# CUSTOMER SYNC  (ERPNext Customer → CRM Organization)
+# ─────────────────────────────────────────────
+
 def ensure_remote_customer_field_defaults():
     try:
         client = get_erpnext_client()
-        need_update = False
         cf1 = client.get_doc("Custom Field", "Customer-custom_tax_payer_type")
         if not cf1.get("default"):
             cf1["default"] = "Unregistered"
@@ -308,23 +235,6 @@ def upsert_crm_organization(cust_data):
         return org.name
 
 
-@frappe.whitelist(allow_guest=True)
-def handle_customer_webhook():
-    data = None
-    try:
-        data = parse_request_data()
-        if not data or not (data.get("customer_name") or data.get("name")):
-            return {"status": "ignored", "message": "No customer data received"}
-
-        org_name = upsert_crm_organization(data)
-        log_event("Customer Sync", "ERP to CRM", "Success", "CRM Organization", org_name, data)
-        return {"status": "success", "organization": org_name}
-    except Exception as e:
-        tb = traceback.format_exc()
-        log_event("Customer Sync", "ERP to CRM", "Error", "Customer", "", data, str(e), tb)
-        return {"status": "error", "message": str(e)}
-
-
 @frappe.whitelist()
 def pull_all_customers():
     settings = get_sync_settings()
@@ -362,6 +272,23 @@ def pull_all_customers():
     return {"synced_count": synced}
 
 
+@frappe.whitelist(allow_guest=True)
+def handle_customer_webhook():
+    data = None
+    try:
+        data = parse_request_data()
+        if not data or not (data.get("customer_name") or data.get("name")):
+            return {"status": "ignored", "message": "No customer data received"}
+
+        org_name = upsert_crm_organization(data)
+        log_event("Customer Sync", "ERP to CRM", "Success", "CRM Organization", org_name, data)
+        return {"status": "success", "organization": org_name}
+    except Exception as e:
+        tb = traceback.format_exc()
+        log_event("Customer Sync", "ERP to CRM", "Error", "Customer", "", data, str(e), tb)
+        return {"status": "error", "message": str(e)}
+
+
 def sync_recent_customers():
     try:
         settings = frappe.get_single("Custom CRM Sync Settings")
@@ -369,3 +296,415 @@ def sync_recent_customers():
             pull_all_customers()
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Scheduled customer sync failed")
+
+
+# ─────────────────────────────────────────────
+# CONTACT SYNC  (ERPNext Contact → CRM Contact & CRM Lead)
+# ─────────────────────────────────────────────
+
+def upsert_crm_contact(contact_data):
+    first_name = (contact_data.get("first_name") or "").strip()
+    last_name = (contact_data.get("last_name") or "").strip()
+    full_name = (contact_data.get("full_name") or f"{first_name} {last_name}").strip()
+    if not full_name and not contact_data.get("name"):
+        return None
+
+    email = (contact_data.get("email_id") or "").strip()
+    phone = (contact_data.get("phone") or "").strip()
+    mobile_no = (contact_data.get("mobile_no") or "").strip()
+
+    if not phone and contact_data.get("phone_nos"):
+        for p in contact_data["phone_nos"]:
+            if p.get("phone"):
+                phone = p["phone"].strip()
+                if not mobile_no:
+                    mobile_no = phone
+                break
+
+    if not email and contact_data.get("email_ids"):
+        for e in contact_data["email_ids"]:
+            if e.get("email_id"):
+                email = e["email_id"].strip()
+                break
+
+    org_name = ""
+    links = contact_data.get("links") or []
+    for l in links:
+        if l.get("link_doctype") in ["Customer", "CRM Organization"]:
+            org_name = l.get("link_name")
+            break
+
+    # 1. Upsert standard Contact doc
+    existing_contact = None
+    if email:
+        existing_contact = frappe.db.get_value("Contact", {"email_id": email}, "name")
+    if not existing_contact and full_name:
+        existing_contact = frappe.db.get_value("Contact", {"first_name": first_name or full_name, "last_name": last_name or ""}, "name")
+    if not existing_contact and contact_data.get("name") and frappe.db.exists("Contact", contact_data.get("name")):
+        existing_contact = contact_data.get("name")
+
+    if existing_contact:
+        cdoc = frappe.get_doc("Contact", existing_contact)
+        if first_name: cdoc.first_name = first_name
+        if last_name: cdoc.last_name = last_name
+        if email: cdoc.email_id = email
+        if phone: cdoc.phone = phone
+        if mobile_no: cdoc.mobile_no = mobile_no
+    else:
+        cdoc = frappe.new_doc("Contact")
+        cdoc.first_name = first_name or full_name
+        cdoc.last_name = last_name or ""
+        cdoc.email_id = email
+        cdoc.phone = phone
+        cdoc.mobile_no = mobile_no
+
+    if org_name:
+        target_doctype = "CRM Organization" if frappe.db.exists("CRM Organization", org_name) else "Customer"
+        already = any(l.link_doctype == target_doctype and l.link_name == org_name for l in cdoc.get("links", []))
+        if not already:
+            cdoc.append("links", {
+                "link_doctype": target_doctype,
+                "link_name": org_name
+            })
+
+    cdoc.save(ignore_permissions=True)
+    contact_name = cdoc.name
+
+    # 2. Upsert CRM Lead (for Frappe CRM Desk view)
+    existing_lead = None
+    if email:
+        existing_lead = frappe.db.get_value("CRM Lead", {"email": email}, "name")
+    if not existing_lead and mobile_no:
+        existing_lead = frappe.db.get_value("CRM Lead", {"mobile_no": mobile_no}, "name")
+    if not existing_lead and full_name:
+        existing_lead = frappe.db.get_value("CRM Lead", {"first_name": first_name or full_name, "last_name": last_name or ""}, "name")
+
+    if existing_lead:
+        ldoc = frappe.get_doc("CRM Lead", existing_lead)
+        if first_name: ldoc.first_name = first_name
+        if last_name: ldoc.last_name = last_name
+        if email and not ldoc.email: ldoc.email = email
+        if mobile_no and not ldoc.mobile_no: ldoc.mobile_no = mobile_no
+        if org_name and not ldoc.organization: ldoc.organization = org_name
+        ldoc.save(ignore_permissions=True)
+    else:
+        ldoc = frappe.new_doc("CRM Lead")
+        ldoc.first_name = first_name or full_name
+        ldoc.last_name = last_name or ""
+        ldoc.email = email
+        ldoc.mobile_no = mobile_no or phone
+        if org_name: ldoc.organization = org_name
+        ldoc.insert(ignore_permissions=True)
+
+    return contact_name
+
+
+@frappe.whitelist()
+def pull_all_contacts():
+    """Bulk pull all ERPNext Contacts → CRM Contact & CRM Lead"""
+    settings = get_sync_settings()
+
+    url = f"{settings.erpnext_url.rstrip('/')}/api/resource/Contact"
+    headers = {
+        "Authorization": f"token {settings.api_key}:{settings.get_password('api_secret')}"
+    }
+    params = {
+        "fields": json.dumps([
+            "name", "first_name", "last_name", "full_name",
+            "mobile_no", "phone", "email_id"
+        ]),
+        "limit_page_length": 500
+    }
+
+    resp = requests.get(url, headers=headers, params=params, timeout=30)
+    if resp.status_code != 200:
+        err = f"Failed to fetch contacts from ERPNext: {resp.status_code} {resp.text}"
+        log_event("Contact Sync", "ERP to CRM", "Error", "Contact", "", None, err)
+        frappe.throw(err)
+
+    contacts = resp.json().get("data", [])
+    synced = 0
+    for ct in contacts:
+        try:
+            # Fetch full contact document for phone_nos, email_ids, links
+            detail_url = f"{settings.erpnext_url.rstrip('/')}/api/resource/Contact/{ct['name']}"
+            det_resp = requests.get(detail_url, headers=headers, timeout=15)
+            full_ct = det_resp.json().get("data", ct) if det_resp.status_code == 200 else ct
+
+            contact_name = upsert_crm_contact(full_ct)
+            ref_name = full_ct.get("full_name") or full_ct.get("name")
+            log_event("Contact Sync", "ERP to CRM", "Success", "Contact", ref_name, full_ct)
+            synced += 1
+        except Exception as e:
+            log_event("Contact Sync", "ERP to CRM", "Error", "Contact", ct.get("name", ""), ct, str(e), traceback.format_exc())
+
+    settings.last_contact_sync = now_datetime()
+    settings.save(ignore_permissions=True)
+    frappe.db.commit()
+
+    log_event("Contact Sync", "ERP to CRM", "Success", "Contact", f"Total: {synced}", {"synced_count": synced})
+    return {"synced_count": synced}
+
+
+@frappe.whitelist(allow_guest=True)
+def handle_contact_webhook():
+    """Webhook handler: ERPNext Contact → CRM Contact & CRM Lead"""
+    data = None
+    try:
+        data = parse_request_data()
+        if not data or not (data.get("first_name") or data.get("full_name") or data.get("name")):
+            return {"status": "ignored", "message": "No contact data received"}
+
+        contact_name = upsert_crm_contact(data)
+        ref_name = data.get("full_name") or data.get("first_name") or data.get("name")
+        log_event("Contact Sync", "ERP to CRM", "Success", "Contact", ref_name, data)
+        return {"status": "success", "contact": contact_name}
+    except Exception as e:
+        tb = traceback.format_exc()
+        log_event("Contact Sync", "ERP to CRM", "Error", "Contact", "", data, str(e), tb)
+        return {"status": "error", "message": str(e)}
+
+
+def sync_recent_contacts():
+    try:
+        settings = frappe.get_single("Custom CRM Sync Settings")
+        if settings.enabled and getattr(settings, "auto_sync_contacts", 1):
+            pull_all_contacts()
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Scheduled contact sync failed")
+
+
+# ─────────────────────────────────────────────
+# QUOTATION SYNC  (ERPNext Quotation → CRM Deal)
+# ─────────────────────────────────────────────
+
+@frappe.whitelist()
+def pull_all_quotations():
+    """Bulk pull all ERPNext Quotations → update CRM Deals & create Sync Logs"""
+    settings = get_sync_settings()
+
+    url = f"{settings.erpnext_url.rstrip('/')}/api/resource/Quotation"
+    headers = {
+        "Authorization": f"token {settings.api_key}:{settings.get_password('api_secret')}"
+    }
+    params = {
+        "fields": json.dumps([
+            "name", "party_name", "quotation_to", "grand_total", "docstatus", "status", "transaction_date"
+        ]),
+        "limit_page_length": 500,
+        "order_by": "creation asc"
+    }
+
+    resp = requests.get(url, headers=headers, params=params, timeout=30)
+    if resp.status_code != 200:
+        err = f"Failed to fetch quotations from ERPNext: {resp.status_code} {resp.text}"
+        log_event("Quotation Sync", "ERP to CRM", "Error", "Quotation", "", None, err)
+        frappe.throw(err)
+
+    quotations = resp.json().get("data", [])
+    synced = 0
+    for q in quotations:
+        try:
+            qtn_name = q.get("name")
+            party_name = q.get("party_name")
+            grand_total = q.get("grand_total") or 0.0
+            docstatus = q.get("docstatus", 0)
+            status_text = "Submitted" if docstatus == 1 else ("Cancelled" if docstatus == 2 else "Draft")
+
+            crm_deal = None
+            if party_name:
+                crm_deal = frappe.db.get_value("CRM Deal", {"erpnext_customer": party_name}, "name")
+                if not crm_deal:
+                    crm_deal = frappe.db.get_value("CRM Deal", {"organization": party_name}, "name")
+
+            ref_name = f"{qtn_name} ({party_name})" if party_name else qtn_name
+            if crm_deal and frappe.db.exists("CRM Deal", crm_deal):
+                deal_doc = frappe.get_doc("CRM Deal", crm_deal)
+                comment = f"ERPNext Quotation {qtn_name} ({status_text}): PKR {grand_total:,.2f}"
+                deal_doc.add_comment("Comment", comment)
+
+                if deal_doc.status == "Qualification" and docstatus == 1:
+                    deal_doc.status = "Proposal/Quotation"
+                    deal_doc.save(ignore_permissions=True)
+
+            log_event("Quotation Sync", "ERP to CRM", "Success", "Quotation", ref_name, q)
+            synced += 1
+        except Exception as e:
+            log_event("Quotation Sync", "ERP to CRM", "Error", "Quotation", q.get("name", ""), q, str(e), traceback.format_exc())
+
+    settings.last_quotation_sync = now_datetime()
+    settings.save(ignore_permissions=True)
+    frappe.db.commit()
+
+    log_event("Quotation Sync", "ERP to CRM", "Success", "Quotation", f"Total: {synced}", {"synced_count": synced})
+    return {"synced_count": synced}
+
+
+@frappe.whitelist(allow_guest=True)
+def handle_quotation_webhook():
+    data = None
+    try:
+        data = parse_request_data()
+        if not data:
+            return {"status": "ignored"}
+
+        qtn_name = data.get("name")
+        crm_deal = data.get("crm_deal")
+        grand_total = data.get("grand_total") or 0.0
+        docstatus = data.get("docstatus", 0)
+        party_name = data.get("party_name")
+
+        if not crm_deal and party_name:
+            crm_deal = frappe.db.get_value("CRM Deal", {"erpnext_customer": party_name}, "name")
+            if not crm_deal:
+                crm_deal = frappe.db.get_value("CRM Deal", {"organization": party_name}, "name")
+
+        status_text = "Submitted" if docstatus == 1 else ("Cancelled" if docstatus == 2 else "Draft")
+        ref_name = f"{qtn_name} ({party_name})" if party_name else qtn_name
+
+        if crm_deal and frappe.db.exists("CRM Deal", crm_deal):
+            comment = f"ERPNext Quotation {qtn_name} ({status_text}) updated: Grand Total PKR {grand_total:,.2f}"
+            deal_doc = frappe.get_doc("CRM Deal", crm_deal)
+            deal_doc.add_comment("Comment", comment)
+
+            if deal_doc.status == "Qualification" and docstatus == 1:
+                deal_doc.status = "Proposal/Quotation"
+                deal_doc.save(ignore_permissions=True)
+
+            log_event("Quotation Sync", "ERP to CRM", "Success", "Quotation", ref_name, data)
+            return {"status": "success", "deal": crm_deal}
+
+        log_event("Quotation Sync", "ERP to CRM", "Success", "Quotation", ref_name, data)
+        return {"status": "success", "message": "Quotation logged"}
+    except Exception as e:
+        tb = traceback.format_exc()
+        log_event("Quotation Sync", "ERP to CRM", "Error", "Quotation", "", data, str(e), tb)
+        return {"status": "error", "message": str(e)}
+
+
+def sync_recent_quotations():
+    try:
+        settings = frappe.get_single("Custom CRM Sync Settings")
+        if settings.enabled and getattr(settings, "auto_sync_quotations", 1):
+            pull_all_quotations()
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Scheduled quotation sync failed")
+
+
+# ─────────────────────────────────────────────
+# SALES ORDER SYNC  (ERPNext Sales Order → CRM Deal)
+# ─────────────────────────────────────────────
+
+@frappe.whitelist()
+def pull_all_sales_orders():
+    """Bulk pull all ERPNext Sales Orders → update CRM Deals & create Sync Logs"""
+    settings = get_sync_settings()
+
+    url = f"{settings.erpnext_url.rstrip('/')}/api/resource/Sales Order"
+    headers = {
+        "Authorization": f"token {settings.api_key}:{settings.get_password('api_secret')}"
+    }
+    params = {
+        "fields": json.dumps([
+            "name", "customer", "grand_total", "docstatus", "status", "transaction_date"
+        ]),
+        "limit_page_length": 500,
+        "order_by": "creation asc"
+    }
+
+    resp = requests.get(url, headers=headers, params=params, timeout=30)
+    if resp.status_code != 200:
+        err = f"Failed to fetch sales orders from ERPNext: {resp.status_code} {resp.text}"
+        log_event("Sales Order Sync", "ERP to CRM", "Error", "Sales Order", "", None, err)
+        frappe.throw(err)
+
+    orders = resp.json().get("data", [])
+    synced = 0
+    for so in orders:
+        try:
+            so_name = so.get("name")
+            customer = so.get("customer")
+            grand_total = so.get("grand_total") or 0.0
+            docstatus = so.get("docstatus", 0)
+            status_text = "Submitted" if docstatus == 1 else ("Cancelled" if docstatus == 2 else "Draft")
+
+            crm_deal = None
+            if customer:
+                crm_deal = frappe.db.get_value("CRM Deal", {"erpnext_customer": customer}, "name")
+                if not crm_deal:
+                    crm_deal = frappe.db.get_value("CRM Deal", {"organization": customer}, "name")
+
+            ref_name = f"{so_name} ({customer})" if customer else so_name
+            if crm_deal and frappe.db.exists("CRM Deal", crm_deal):
+                deal_doc = frappe.get_doc("CRM Deal", crm_deal)
+                comment = f"ERPNext Sales Order {so_name} ({status_text}): PKR {grand_total:,.2f}"
+                deal_doc.add_comment("Comment", comment)
+
+                if docstatus == 1 and deal_doc.status != "Won":
+                    deal_doc.status = "Won"
+                    deal_doc.annual_revenue = grand_total
+                    deal_doc.save(ignore_permissions=True)
+
+            log_event("Sales Order Sync", "ERP to CRM", "Success", "Sales Order", ref_name, so)
+            synced += 1
+        except Exception as e:
+            log_event("Sales Order Sync", "ERP to CRM", "Error", "Sales Order", so.get("name", ""), so, str(e), traceback.format_exc())
+
+    settings.last_sales_order_sync = now_datetime()
+    settings.save(ignore_permissions=True)
+    frappe.db.commit()
+
+    log_event("Sales Order Sync", "ERP to CRM", "Success", "Sales Order", f"Total: {synced}", {"synced_count": synced})
+    return {"synced_count": synced}
+
+
+@frappe.whitelist(allow_guest=True)
+def handle_sales_order_webhook():
+    data = None
+    try:
+        data = parse_request_data()
+        if not data:
+            return {"status": "ignored"}
+
+        so_name = data.get("name")
+        customer = data.get("customer")
+        grand_total = data.get("grand_total") or 0.0
+        docstatus = data.get("docstatus", 0)
+        status_text = "Submitted" if docstatus == 1 else ("Cancelled" if docstatus == 2 else "Draft")
+
+        crm_deal = None
+        if customer:
+            crm_deal = frappe.db.get_value("CRM Deal", {"erpnext_customer": customer}, "name")
+            if not crm_deal:
+                crm_deal = frappe.db.get_value("CRM Deal", {"organization": customer}, "name")
+
+        ref_name = f"{so_name} ({customer})" if customer else so_name
+
+        if crm_deal and frappe.db.exists("CRM Deal", crm_deal):
+            deal_doc = frappe.get_doc("CRM Deal", crm_deal)
+            comment = f"Sales Order {so_name} ({status_text}) placed on ERPNext for PKR {grand_total:,.2f}"
+            deal_doc.add_comment("Comment", comment)
+
+            if docstatus == 1 and deal_doc.status != "Won":
+                deal_doc.status = "Won"
+                deal_doc.annual_revenue = grand_total
+                deal_doc.save(ignore_permissions=True)
+
+            log_event("Sales Order Sync", "ERP to CRM", "Success", "Sales Order", ref_name, data)
+            return {"status": "success", "deal": crm_deal}
+
+        log_event("Sales Order Sync", "ERP to CRM", "Success", "Sales Order", ref_name, data)
+        return {"status": "success", "message": "Sales order logged"}
+    except Exception as e:
+        tb = traceback.format_exc()
+        log_event("Sales Order Sync", "ERP to CRM", "Error", "Sales Order", "", data, str(e), tb)
+        return {"status": "error", "message": str(e)}
+
+
+def sync_recent_sales_orders():
+    try:
+        settings = frappe.get_single("Custom CRM Sync Settings")
+        if settings.enabled and getattr(settings, "auto_sync_sales_orders", 1):
+            pull_all_sales_orders()
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Scheduled sales order sync failed")
