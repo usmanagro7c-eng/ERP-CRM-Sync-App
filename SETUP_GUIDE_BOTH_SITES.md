@@ -43,54 +43,123 @@ Agar ERP par FBR Integration ya koi aisi app installed hai jo Customer par field
 ---
 
 ### Step 1.3: Webhooks Configure Karen (5 Webhooks)
-ERPNext Desk mein **Webhook List** open karen (URL: `/desk/webhook` ya `/app/webhook`). **Add Webhook** par click kar ke mandarja zail 5 webhooks banayen:
+ERPNext Desk mein **Webhook List** open karen (URL: `/desk/webhook` ya `/app/webhook`). **Add Webhook** par click kar ke mandarja zail 5 webhooks banayen.
+
+Har webhook mein:
+- **Request Method:** `POST`
+- **Request Structure:** `JSON`
+- **Enabled:** Checked (Tick)
+- **Webhook Headers:** Add Row $\rightarrow$ Key: `Content-Type`, Value: `application/json`
+- **JSON Request Body (`webhook_json`):** Neechay diya gaya exact JSON paste karen.
+
+---
 
 #### Webhook 1: Item Sync (ERP $\rightarrow$ CRM Products)
+- **Webhook Name:** `CRM Sync - Item`
 - **DocType:** `Item`
 - **Doc Event:** `on_update`
 - **Request URL:** `https://crm_site.pk/api/method/custom_crm_sync.api.sync.handle_item_webhook`
-- **Request Method:** `POST`
 - **Request Structure:** `JSON`
-- **Enabled:** Checked
-- **Webhook Headers:** Add Row $\rightarrow$ Key: `Content-Type`, Value: `application/json`
+- **JSON Request Body:**
+```json
+{
+  "item_code": "{{ doc.item_code }}",
+  "item_name": "{{ doc.item_name }}",
+  "standard_rate": {{ doc.standard_rate or 0.0 }},
+  "disabled": {{ doc.disabled or 0 }},
+  "description": "{{ (doc.description or '') | replace('\"', '\\\"') | replace('\n', ' ') }}",
+  "image": "{{ doc.image or '' }}"
+}
+```
+
+---
 
 #### Webhook 2: Customer Sync (ERP $\rightarrow$ CRM Organization)
+- **Webhook Name:** `CRM Sync - Customer`
 - **DocType:** `Customer`
 - **Doc Event:** `on_update`
 - **Request URL:** `https://crm_site.pk/api/method/custom_crm_sync.api.sync.handle_customer_webhook`
-- **Request Method:** `POST`
 - **Request Structure:** `JSON`
-- **Enabled:** Checked
-- **Webhook Headers:** Add Row $\rightarrow$ Key: `Content-Type`, Value: `application/json`
+- **JSON Request Body:**
+```json
+{
+  "customer_name": "{{ doc.customer_name }}",
+  "name": "{{ doc.name }}",
+  "customer_type": "{{ doc.customer_type or 'Company' }}",
+  "customer_group": "{{ doc.customer_group or 'All Customer Groups' }}",
+  "territory": "{{ doc.territory or 'Pakistan' }}",
+  "default_currency": "{{ doc.default_currency or 'PKR' }}",
+  "website": "{{ doc.website or '' }}"
+}
+```
+
+---
 
 #### Webhook 3: Contact Sync (ERP $\rightarrow$ CRM Contact & CRM Lead)
+- **Webhook Name:** `CRM Sync - Contact`
 - **DocType:** `Contact`
 - **Doc Event:** `on_update`
 - **Request URL:** `https://crm_site.pk/api/method/custom_crm_sync.api.sync.handle_contact_webhook`
-- **Request Method:** `POST`
 - **Request Structure:** `JSON`
-- **Enabled:** Checked
-- **Webhook Headers:** Add Row $\rightarrow$ Key: `Content-Type`, Value: `application/json`
+- **JSON Request Body:**
+```json
+{
+  "name": "{{ doc.name }}",
+  "first_name": "{{ doc.first_name or '' }}",
+  "last_name": "{{ doc.last_name or '' }}",
+  "full_name": "{{ doc.full_name or '' }}",
+  "email_id": "{{ doc.email_id or '' }}",
+  "mobile_no": "{{ doc.mobile_no or '' }}",
+  "phone": "{{ doc.phone or '' }}",
+  "company_name": "{{ doc.company_name or '' }}"
+}
+```
+
+---
 
 #### Webhook 4: Quotation Sync (ERP $\rightarrow$ CRM Deal & Log)
+- **Webhook Name:** `CRM Sync - Quotation`
 - **DocType:** `Quotation`
 - **Doc Event:** `on_update`
 - **Request URL:** `https://crm_site.pk/api/method/custom_crm_sync.api.sync.handle_quotation_webhook`
-- **Request Method:** `POST`
 - **Request Structure:** `JSON`
-- **Enabled:** Checked
-- **Webhook Headers:** Add Row $\rightarrow$ Key: `Content-Type`, Value: `application/json`
+- **JSON Request Body:**
+```json
+{
+  "name": "{{ doc.name }}",
+  "party_name": "{{ doc.party_name }}",
+  "quotation_to": "{{ doc.quotation_to or 'Customer' }}",
+  "crm_deal": "{{ doc.crm_deal or '' }}",
+  "grand_total": {{ doc.grand_total or 0.0 }},
+  "docstatus": {{ doc.docstatus or 0 }},
+  "status": "{{ doc.status or 'Draft' }}",
+  "transaction_date": "{{ doc.transaction_date or '' }}"
+}
+```
+
+---
 
 #### Webhook 5: Sales Order Sync (ERP $\rightarrow$ CRM Deal Won & Log)
+- **Webhook Name:** `CRM Sync - Sales Order`
 - **DocType:** `Sales Order`
 - **Doc Event:** `on_submit`
 - **Request URL:** `https://crm_site.pk/api/method/custom_crm_sync.api.sync.handle_sales_order_webhook`
-- **Request Method:** `POST`
 - **Request Structure:** `JSON`
-- **Enabled:** Checked
-- **Webhook Headers:** Add Row $\rightarrow$ Key: `Content-Type`, Value: `application/json`
+- **JSON Request Body:**
+```json
+{
+  "name": "{{ doc.name }}",
+  "customer": "{{ doc.customer }}",
+  "grand_total": {{ doc.grand_total or 0.0 }},
+  "docstatus": {{ doc.docstatus or 0 }},
+  "status": "{{ doc.status or 'Draft' }}",
+  "transaction_date": "{{ doc.transaction_date or '' }}"
+}
+```
 
-> **Note:** Webhooks mein `Webhook Data` ko empty chhor dein taake Frappe complete document payload JSON mein send kare.
+> **Wazahat (Tip):**
+> 1. Agar aap Webhook form mein **JSON Request Body** ko bilkul **khaali (empty)** chhor dein, to Frappe automatically document ka mukammal data (`doc.as_dict()`) send karta hai.
+> 2. Hamari app ke tamam API endpoints dono tarha ke payloads (chahe custom JSON Request Body ho ya complete document) ko automatically parse aur accept karte hain. Lekin upar diye gaye specific JSON bodies use karna recommended hai taake traffic clean aur fast rahe.
 
 ---
 
