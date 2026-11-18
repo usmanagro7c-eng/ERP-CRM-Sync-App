@@ -1,0 +1,1 @@
+custom_crm_sync.patches.add_user_to_sales_hierarchy

@@ -1,10 +1,22 @@
 import json
 import traceback
+from contextlib import contextmanager
 import requests
 import frappe
 from frappe import _
 from frappe.frappeclient import FrappeClient
 from frappe.utils import now_datetime
+
+
+@contextmanager
+def suppress_hierarchy_notifications():
+    """Context manager to avoid notification loops/storms during sync operations."""
+    prev = getattr(frappe.flags, "skip_hierarchy_notify", False)
+    frappe.flags.skip_hierarchy_notify = True
+    try:
+        yield
+    finally:
+        frappe.flags.skip_hierarchy_notify = prev
 
 
 def get_sync_settings():
@@ -142,12 +154,13 @@ def pull_all_items():
 
     items = resp.json().get("data", [])
     synced = 0
-    for it in items:
-        try:
-            upsert_crm_product(it)
-            synced += 1
-        except Exception as e:
-            log_event("Item Sync", "ERP to CRM", "Error", "Item", it.get("name"), it, str(e), traceback.format_exc())
+    with suppress_hierarchy_notifications():
+        for it in items:
+            try:
+                upsert_crm_product(it)
+                synced += 1
+            except Exception as e:
+                log_event("Item Sync", "ERP to CRM", "Error", "Item", it.get("name"), it, str(e), traceback.format_exc())
 
     settings.last_item_sync = now_datetime()
     settings.save(ignore_permissions=True)
@@ -165,7 +178,8 @@ def handle_item_webhook():
         if not data or not (data.get("item_code") or data.get("name")):
             return {"status": "ignored", "message": "No item data received"}
 
-        product_name = upsert_crm_product(data)
+        with suppress_hierarchy_notifications():
+            product_name = upsert_crm_product(data)
         log_event("Item Sync", "ERP to CRM", "Success", "CRM Product", product_name, data)
         return {"status": "success", "product": product_name}
     except Exception as e:
@@ -257,12 +271,13 @@ def pull_all_customers():
 
     customers = resp.json().get("data", [])
     synced = 0
-    for c in customers:
-        try:
-            upsert_crm_organization(c)
-            synced += 1
-        except Exception as e:
-            log_event("Customer Sync", "ERP to CRM", "Error", "Customer", c.get("name"), c, str(e), traceback.format_exc())
+    with suppress_hierarchy_notifications():
+        for c in customers:
+            try:
+                upsert_crm_organization(c)
+                synced += 1
+            except Exception as e:
+                log_event("Customer Sync", "ERP to CRM", "Error", "Customer", c.get("name"), c, str(e), traceback.format_exc())
 
     settings.last_customer_sync = now_datetime()
     settings.save(ignore_permissions=True)
@@ -280,7 +295,8 @@ def handle_customer_webhook():
         if not data or not (data.get("customer_name") or data.get("name")):
             return {"status": "ignored", "message": "No customer data received"}
 
-        org_name = upsert_crm_organization(data)
+        with suppress_hierarchy_notifications():
+            org_name = upsert_crm_organization(data)
         log_event("Customer Sync", "ERP to CRM", "Success", "CRM Organization", org_name, data)
         return {"status": "success", "organization": org_name}
     except Exception as e:
@@ -424,19 +440,20 @@ def pull_all_contacts():
 
     contacts = resp.json().get("data", [])
     synced = 0
-    for ct in contacts:
-        try:
-            # Fetch full contact document for phone_nos, email_ids, links
-            detail_url = f"{settings.erpnext_url.rstrip('/')}/api/resource/Contact/{ct['name']}"
-            det_resp = requests.get(detail_url, headers=headers, timeout=15)
-            full_ct = det_resp.json().get("data", ct) if det_resp.status_code == 200 else ct
+    with suppress_hierarchy_notifications():
+        for ct in contacts:
+            try:
+                # Fetch full contact document for phone_nos, email_ids, links
+                detail_url = f"{settings.erpnext_url.rstrip('/')}/api/resource/Contact/{ct['name']}"
+                det_resp = requests.get(detail_url, headers=headers, timeout=15)
+                full_ct = det_resp.json().get("data", ct) if det_resp.status_code == 200 else ct
 
-            contact_name = upsert_crm_contact(full_ct)
-            ref_name = full_ct.get("full_name") or full_ct.get("name")
-            log_event("Contact Sync", "ERP to CRM", "Success", "Contact", ref_name, full_ct)
-            synced += 1
-        except Exception as e:
-            log_event("Contact Sync", "ERP to CRM", "Error", "Contact", ct.get("name", ""), ct, str(e), traceback.format_exc())
+                contact_name = upsert_crm_contact(full_ct)
+                ref_name = full_ct.get("full_name") or full_ct.get("name")
+                log_event("Contact Sync", "ERP to CRM", "Success", "Contact", ref_name, full_ct)
+                synced += 1
+            except Exception as e:
+                log_event("Contact Sync", "ERP to CRM", "Error", "Contact", ct.get("name", ""), ct, str(e), traceback.format_exc())
 
     settings.last_contact_sync = now_datetime()
     settings.save(ignore_permissions=True)
@@ -455,7 +472,8 @@ def handle_contact_webhook():
         if not data or not (data.get("first_name") or data.get("full_name") or data.get("name")):
             return {"status": "ignored", "message": "No contact data received"}
 
-        contact_name = upsert_crm_contact(data)
+        with suppress_hierarchy_notifications():
+            contact_name = upsert_crm_contact(data)
         ref_name = data.get("full_name") or data.get("first_name") or data.get("name")
         log_event("Contact Sync", "ERP to CRM", "Success", "Contact", ref_name, data)
         return {"status": "success", "contact": contact_name}
@@ -503,34 +521,35 @@ def pull_all_quotations():
 
     quotations = resp.json().get("data", [])
     synced = 0
-    for q in quotations:
-        try:
-            qtn_name = q.get("name")
-            party_name = q.get("party_name")
-            grand_total = q.get("grand_total") or 0.0
-            docstatus = q.get("docstatus", 0)
-            status_text = "Submitted" if docstatus == 1 else ("Cancelled" if docstatus == 2 else "Draft")
+    with suppress_hierarchy_notifications():
+        for q in quotations:
+            try:
+                qtn_name = q.get("name")
+                party_name = q.get("party_name")
+                grand_total = q.get("grand_total") or 0.0
+                docstatus = q.get("docstatus", 0)
+                status_text = "Submitted" if docstatus == 1 else ("Cancelled" if docstatus == 2 else "Draft")
 
-            crm_deal = None
-            if party_name:
-                crm_deal = frappe.db.get_value("CRM Deal", {"erpnext_customer": party_name}, "name")
-                if not crm_deal:
-                    crm_deal = frappe.db.get_value("CRM Deal", {"organization": party_name}, "name")
+                crm_deal = None
+                if party_name:
+                    crm_deal = frappe.db.get_value("CRM Deal", {"erpnext_customer": party_name}, "name")
+                    if not crm_deal:
+                        crm_deal = frappe.db.get_value("CRM Deal", {"organization": party_name}, "name")
 
-            ref_name = f"{qtn_name} ({party_name})" if party_name else qtn_name
-            if crm_deal and frappe.db.exists("CRM Deal", crm_deal):
-                deal_doc = frappe.get_doc("CRM Deal", crm_deal)
-                comment = f"ERPNext Quotation {qtn_name} ({status_text}): PKR {grand_total:,.2f}"
-                deal_doc.add_comment("Comment", comment)
+                ref_name = f"{qtn_name} ({party_name})" if party_name else qtn_name
+                if crm_deal and frappe.db.exists("CRM Deal", crm_deal):
+                    deal_doc = frappe.get_doc("CRM Deal", crm_deal)
+                    comment = f"ERPNext Quotation {qtn_name} ({status_text}): PKR {grand_total:,.2f}"
+                    deal_doc.add_comment("Comment", comment)
 
-                if deal_doc.status == "Qualification" and docstatus == 1:
-                    deal_doc.status = "Proposal/Quotation"
-                    deal_doc.save(ignore_permissions=True)
+                    if deal_doc.status == "Qualification" and docstatus == 1:
+                        deal_doc.status = "Proposal/Quotation"
+                        deal_doc.save(ignore_permissions=True)
 
-            log_event("Quotation Sync", "ERP to CRM", "Success", "Quotation", ref_name, q)
-            synced += 1
-        except Exception as e:
-            log_event("Quotation Sync", "ERP to CRM", "Error", "Quotation", q.get("name", ""), q, str(e), traceback.format_exc())
+                log_event("Quotation Sync", "ERP to CRM", "Success", "Quotation", ref_name, q)
+                synced += 1
+            except Exception as e:
+                log_event("Quotation Sync", "ERP to CRM", "Error", "Quotation", q.get("name", ""), q, str(e), traceback.format_exc())
 
     settings.last_quotation_sync = now_datetime()
     settings.save(ignore_permissions=True)
@@ -572,9 +591,44 @@ def handle_quotation_webhook():
                 deal_doc.save(ignore_permissions=True)
 
             log_event("Quotation Sync", "ERP to CRM", "Success", "Quotation", ref_name, data)
+
+            try:
+                from custom_crm_sync.api.notify import notify_entity
+                notify_entity(
+                    doctype="Quotation",
+                    docname=ref_name,
+                    action=status_text,
+                    details={
+                        "Grand Total": f"PKR {grand_total:,.2f}",
+                        "Party Name": party_name,
+                        "Status": status_text,
+                        "Linked Deal": crm_deal
+                    },
+                    crm_deal=crm_deal
+                )
+            except Exception:
+                frappe.log_error(frappe.get_traceback(), "Failed to dispatch hierarchy notification for quotation")
+
             return {"status": "success", "deal": crm_deal}
 
         log_event("Quotation Sync", "ERP to CRM", "Success", "Quotation", ref_name, data)
+
+        try:
+            from custom_crm_sync.api.notify import notify_entity
+            notify_entity(
+                doctype="Quotation",
+                docname=ref_name,
+                action=status_text,
+                details={
+                    "Grand Total": f"PKR {grand_total:,.2f}",
+                    "Party Name": party_name,
+                    "Status": status_text
+                },
+                crm_deal=crm_deal
+            )
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "Failed to dispatch hierarchy notification for quotation")
+
         return {"status": "success", "message": "Quotation logged"}
     except Exception as e:
         tb = traceback.format_exc()
@@ -620,35 +674,36 @@ def pull_all_sales_orders():
 
     orders = resp.json().get("data", [])
     synced = 0
-    for so in orders:
-        try:
-            so_name = so.get("name")
-            customer = so.get("customer")
-            grand_total = so.get("grand_total") or 0.0
-            docstatus = so.get("docstatus", 0)
-            status_text = "Submitted" if docstatus == 1 else ("Cancelled" if docstatus == 2 else "Draft")
+    with suppress_hierarchy_notifications():
+        for so in orders:
+            try:
+                so_name = so.get("name")
+                customer = so.get("customer")
+                grand_total = so.get("grand_total") or 0.0
+                docstatus = so.get("docstatus", 0)
+                status_text = "Submitted" if docstatus == 1 else ("Cancelled" if docstatus == 2 else "Draft")
 
-            crm_deal = None
-            if customer:
-                crm_deal = frappe.db.get_value("CRM Deal", {"erpnext_customer": customer}, "name")
-                if not crm_deal:
-                    crm_deal = frappe.db.get_value("CRM Deal", {"organization": customer}, "name")
+                crm_deal = None
+                if customer:
+                    crm_deal = frappe.db.get_value("CRM Deal", {"erpnext_customer": customer}, "name")
+                    if not crm_deal:
+                        crm_deal = frappe.db.get_value("CRM Deal", {"organization": customer}, "name")
 
-            ref_name = f"{so_name} ({customer})" if customer else so_name
-            if crm_deal and frappe.db.exists("CRM Deal", crm_deal):
-                deal_doc = frappe.get_doc("CRM Deal", crm_deal)
-                comment = f"ERPNext Sales Order {so_name} ({status_text}): PKR {grand_total:,.2f}"
-                deal_doc.add_comment("Comment", comment)
+                ref_name = f"{so_name} ({customer})" if customer else so_name
+                if crm_deal and frappe.db.exists("CRM Deal", crm_deal):
+                    deal_doc = frappe.get_doc("CRM Deal", crm_deal)
+                    comment = f"ERPNext Sales Order {so_name} ({status_text}): PKR {grand_total:,.2f}"
+                    deal_doc.add_comment("Comment", comment)
 
-                if docstatus == 1 and deal_doc.status != "Won":
-                    deal_doc.status = "Won"
-                    deal_doc.annual_revenue = grand_total
-                    deal_doc.save(ignore_permissions=True)
+                    if docstatus == 1 and deal_doc.status != "Won":
+                        deal_doc.status = "Won"
+                        deal_doc.annual_revenue = grand_total
+                        deal_doc.save(ignore_permissions=True)
 
-            log_event("Sales Order Sync", "ERP to CRM", "Success", "Sales Order", ref_name, so)
-            synced += 1
-        except Exception as e:
-            log_event("Sales Order Sync", "ERP to CRM", "Error", "Sales Order", so.get("name", ""), so, str(e), traceback.format_exc())
+                log_event("Sales Order Sync", "ERP to CRM", "Success", "Sales Order", ref_name, so)
+                synced += 1
+            except Exception as e:
+                log_event("Sales Order Sync", "ERP to CRM", "Error", "Sales Order", so.get("name", ""), so, str(e), traceback.format_exc())
 
     settings.last_sales_order_sync = now_datetime()
     settings.save(ignore_permissions=True)
@@ -691,9 +746,44 @@ def handle_sales_order_webhook():
                 deal_doc.save(ignore_permissions=True)
 
             log_event("Sales Order Sync", "ERP to CRM", "Success", "Sales Order", ref_name, data)
+
+            try:
+                from custom_crm_sync.api.notify import notify_entity
+                notify_entity(
+                    doctype="Sales Order",
+                    docname=ref_name,
+                    action=status_text,
+                    details={
+                        "Grand Total": f"PKR {grand_total:,.2f}",
+                        "Customer": customer,
+                        "Status": status_text,
+                        "Linked Deal": crm_deal
+                    },
+                    crm_deal=crm_deal
+                )
+            except Exception:
+                frappe.log_error(frappe.get_traceback(), "Failed to dispatch hierarchy notification for sales order")
+
             return {"status": "success", "deal": crm_deal}
 
         log_event("Sales Order Sync", "ERP to CRM", "Success", "Sales Order", ref_name, data)
+
+        try:
+            from custom_crm_sync.api.notify import notify_entity
+            notify_entity(
+                doctype="Sales Order",
+                docname=ref_name,
+                action=status_text,
+                details={
+                    "Grand Total": f"PKR {grand_total:,.2f}",
+                    "Customer": customer,
+                    "Status": status_text
+                },
+                crm_deal=crm_deal
+            )
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "Failed to dispatch hierarchy notification for sales order")
+
         return {"status": "success", "message": "Sales order logged"}
     except Exception as e:
         tb = traceback.format_exc()

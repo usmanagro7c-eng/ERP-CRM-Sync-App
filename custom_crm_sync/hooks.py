@@ -13,6 +13,31 @@ doctype_js = {
     "CRM Deal": "public/js/crm_deal.js"
 }
 
+# Document Events
+# ---------------
+doc_events = {
+    "CRM Deal": {
+        "after_insert": "custom_crm_sync.api.notify.on_change",
+        "on_update": "custom_crm_sync.api.notify.on_change"
+    },
+    "CRM Lead": {
+        "after_insert": "custom_crm_sync.api.notify.on_change",
+        "on_update": "custom_crm_sync.api.notify.on_change"
+    },
+    "CRM Task": {
+        "after_insert": "custom_crm_sync.api.notify.on_change",
+        "on_update": "custom_crm_sync.api.notify.on_change"
+    },
+    "CRM Organization": {
+        "after_insert": "custom_crm_sync.api.notify.on_change",
+        "on_update": "custom_crm_sync.api.notify.on_change"
+    },
+    "Contact": {
+        "after_insert": "custom_crm_sync.api.notify.on_change",
+        "on_update": "custom_crm_sync.api.notify.on_change"
+    }
+}
+
 # Scheduled Tasks
 # ---------------
 scheduler_events = {
