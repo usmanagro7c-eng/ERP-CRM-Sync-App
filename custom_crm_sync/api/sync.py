@@ -321,6 +321,7 @@ def sync_recent_customers():
 def upsert_crm_contact(contact_data):
     first_name = (contact_data.get("first_name") or "").strip()
     last_name = (contact_data.get("last_name") or "").strip()
+    middle_name = (contact_data.get("middle_name") or "").strip()
     full_name = (contact_data.get("full_name") or f"{first_name} {last_name}").strip()
     if not full_name and not contact_data.get("name"):
         return None
@@ -328,32 +329,64 @@ def upsert_crm_contact(contact_data):
     email = (contact_data.get("email_id") or "").strip()
     phone = (contact_data.get("phone") or "").strip()
     mobile_no = (contact_data.get("mobile_no") or "").strip()
+    salutation = (contact_data.get("salutation") or "").strip()
+    gender = (contact_data.get("gender") or "").strip()
+    designation = (contact_data.get("designation") or "").strip()
+    company_name = (contact_data.get("company_name") or "").strip()
+    department = (contact_data.get("department") or "").strip()
 
-    if not phone and contact_data.get("phone_nos"):
-        for p in contact_data["phone_nos"]:
-            if p.get("phone"):
-                phone = p["phone"].strip()
-                if not mobile_no:
-                    mobile_no = phone
-                break
+    # Extract all email IDs
+    all_emails = []
+    if email:
+        all_emails.append({"email_id": email, "is_primary": 1})
+    for e in (contact_data.get("email_ids") or []):
+        em = (e.get("email_id") or "").strip()
+        if em and not any(x["email_id"].lower() == em.lower() for x in all_emails):
+            all_emails.append({
+                "email_id": em,
+                "is_primary": 1 if e.get("is_primary") and not email else 0
+            })
+    if not email and all_emails:
+        email = all_emails[0]["email_id"]
+        all_emails[0]["is_primary"] = 1
 
-    if not email and contact_data.get("email_ids"):
-        for e in contact_data["email_ids"]:
-            if e.get("email_id"):
-                email = e["email_id"].strip()
-                break
+    # Extract all phone numbers
+    all_phones = []
+    if mobile_no or phone:
+        all_phones.append({
+            "phone": mobile_no or phone,
+            "is_primary_mobile_no": 1 if mobile_no else 0,
+            "is_primary_phone": 1 if phone else 0
+        })
+    for p in (contact_data.get("phone_nos") or []):
+        ph = (p.get("phone") or "").strip()
+        if ph and not any(x["phone"] == ph for x in all_phones):
+            all_phones.append({
+                "phone": ph,
+                "is_primary_phone": p.get("is_primary_phone", 0),
+                "is_primary_mobile_no": p.get("is_primary_mobile_no", 0)
+            })
+    if not mobile_no and all_phones:
+        mobile_no = all_phones[0]["phone"]
 
+    # Resolve linked organization / customer
     org_name = ""
     links = contact_data.get("links") or []
     for l in links:
         if l.get("link_doctype") in ["Customer", "CRM Organization"]:
             org_name = l.get("link_name")
             break
+    if not org_name and company_name:
+        org_name = company_name
 
     # 1. Upsert standard Contact doc
     existing_contact = None
     if email:
         existing_contact = frappe.db.get_value("Contact", {"email_id": email}, "name")
+        if not existing_contact:
+            existing_contact = frappe.db.get_value("Contact Email", {"email_id": email}, "parent")
+    if not existing_contact and mobile_no:
+        existing_contact = frappe.db.get_value("Contact Phone", {"phone": mobile_no}, "parent")
     if not existing_contact and full_name:
         existing_contact = frappe.db.get_value("Contact", {"first_name": first_name or full_name, "last_name": last_name or ""}, "name")
     if not existing_contact and contact_data.get("name") and frappe.db.exists("Contact", contact_data.get("name")):
@@ -363,30 +396,92 @@ def upsert_crm_contact(contact_data):
         cdoc = frappe.get_doc("Contact", existing_contact)
         if first_name: cdoc.first_name = first_name
         if last_name: cdoc.last_name = last_name
-        if email: cdoc.email_id = email
-        if phone: cdoc.phone = phone
-        if mobile_no: cdoc.mobile_no = mobile_no
+        if middle_name: cdoc.middle_name = middle_name
+        if salutation and frappe.db.exists("Salutation", salutation): cdoc.salutation = salutation
+        if gender and frappe.db.exists("Gender", gender): cdoc.gender = gender
+        if designation: cdoc.designation = designation
+        if company_name: cdoc.company_name = company_name
+        if department: cdoc.department = department
     else:
         cdoc = frappe.new_doc("Contact")
         cdoc.first_name = first_name or full_name
         cdoc.last_name = last_name or ""
-        cdoc.email_id = email
-        cdoc.phone = phone
-        cdoc.mobile_no = mobile_no
+        if middle_name: cdoc.middle_name = middle_name
+        if salutation and frappe.db.exists("Salutation", salutation): cdoc.salutation = salutation
+        if gender and frappe.db.exists("Gender", gender): cdoc.gender = gender
+        if designation: cdoc.designation = designation
+        if company_name: cdoc.company_name = company_name
+        if department: cdoc.department = department
 
-    if org_name:
-        target_doctype = "CRM Organization" if frappe.db.exists("CRM Organization", org_name) else "Customer"
-        already = any(l.link_doctype == target_doctype and l.link_name == org_name for l in cdoc.get("links", []))
-        if not already:
+    # Populate child table email_ids (REQUIRED for Frappe Contact.email_id to persist)
+    for em_info in all_emails:
+        em_val = em_info["email_id"]
+        matched_row = None
+        for r in cdoc.get("email_ids", []):
+            if r.email_id and r.email_id.strip().lower() == em_val.lower():
+                matched_row = r
+                break
+        if not matched_row:
+            cdoc.append("email_ids", {
+                "email_id": em_val,
+                "is_primary": em_info["is_primary"]
+            })
+        else:
+            if em_info["is_primary"]:
+                matched_row.is_primary = 1
+
+    # Populate child table phone_nos (REQUIRED for Frappe Contact.phone / mobile_no to persist)
+    for ph_info in all_phones:
+        ph_val = ph_info["phone"]
+        matched_row = None
+        for r in cdoc.get("phone_nos", []):
+            if r.phone and r.phone.strip() == ph_val:
+                matched_row = r
+                break
+        if not matched_row:
+            cdoc.append("phone_nos", {
+                "phone": ph_val,
+                "is_primary_phone": ph_info["is_primary_phone"],
+                "is_primary_mobile_no": ph_info["is_primary_mobile_no"]
+            })
+        else:
+            if ph_info["is_primary_phone"]: matched_row.is_primary_phone = 1
+            if ph_info["is_primary_mobile_no"]: matched_row.is_primary_mobile_no = 1
+
+    # Populate links child table (Dynamic Link to Customer / CRM Organization)
+    for l in links:
+        link_dt = l.get("link_doctype")
+        link_nm = l.get("link_name")
+        if not link_dt or not link_nm:
+            continue
+
+        target_dt = link_dt
+        target_nm = link_nm
+        if link_dt == "Customer":
+            if frappe.db.exists("CRM Organization", link_nm):
+                target_dt = "CRM Organization"
+            elif frappe.db.exists("Customer", link_nm):
+                target_dt = "Customer"
+            else:
+                crm_org = frappe.db.get_value("CRM Organization", {"erpnext_customer": link_nm}, "name")
+                if crm_org:
+                    target_dt = "CRM Organization"
+                    target_nm = crm_org
+
+        already = any(
+            dl.link_doctype == target_dt and dl.link_name == target_nm
+            for dl in cdoc.get("links", [])
+        )
+        if not already and frappe.db.exists(target_dt, target_nm):
             cdoc.append("links", {
-                "link_doctype": target_doctype,
-                "link_name": org_name
+                "link_doctype": target_dt,
+                "link_name": target_nm
             })
 
     cdoc.save(ignore_permissions=True)
     contact_name = cdoc.name
 
-    # 2. Upsert CRM Lead (for Frappe CRM Desk view)
+    # 2. Upsert CRM Lead (for Frappe CRM Desk / PipeDrive leads)
     existing_lead = None
     if email:
         existing_lead = frappe.db.get_value("CRM Lead", {"email": email}, "name")
@@ -395,13 +490,24 @@ def upsert_crm_contact(contact_data):
     if not existing_lead and full_name:
         existing_lead = frappe.db.get_value("CRM Lead", {"first_name": first_name or full_name, "last_name": last_name or ""}, "name")
 
+    matched_org = None
+    if org_name:
+        if frappe.db.exists("CRM Organization", org_name):
+            matched_org = org_name
+        else:
+            matched_org = frappe.db.get_value("CRM Organization", {"erpnext_customer": org_name}, "name")
+
     if existing_lead:
         ldoc = frappe.get_doc("CRM Lead", existing_lead)
         if first_name: ldoc.first_name = first_name
         if last_name: ldoc.last_name = last_name
-        if email and not ldoc.email: ldoc.email = email
-        if mobile_no and not ldoc.mobile_no: ldoc.mobile_no = mobile_no
-        if org_name and not ldoc.organization: ldoc.organization = org_name
+        if email: ldoc.email = email
+        if mobile_no: ldoc.mobile_no = mobile_no
+        if phone and not ldoc.phone: ldoc.phone = phone
+        if matched_org and not ldoc.organization: ldoc.organization = matched_org
+        if designation and not ldoc.job_title: ldoc.job_title = designation
+        if salutation and not ldoc.salutation and frappe.db.exists("Salutation", salutation): ldoc.salutation = salutation
+        if gender and not ldoc.gender and frappe.db.exists("Gender", gender): ldoc.gender = gender
         ldoc.save(ignore_permissions=True)
     else:
         ldoc = frappe.new_doc("CRM Lead")
@@ -409,7 +515,11 @@ def upsert_crm_contact(contact_data):
         ldoc.last_name = last_name or ""
         ldoc.email = email
         ldoc.mobile_no = mobile_no or phone
-        if org_name: ldoc.organization = org_name
+        ldoc.phone = phone
+        if matched_org: ldoc.organization = matched_org
+        if designation: ldoc.job_title = designation
+        if salutation and frappe.db.exists("Salutation", salutation): ldoc.salutation = salutation
+        if gender and frappe.db.exists("Gender", gender): ldoc.gender = gender
         ldoc.insert(ignore_permissions=True)
 
     return contact_name
