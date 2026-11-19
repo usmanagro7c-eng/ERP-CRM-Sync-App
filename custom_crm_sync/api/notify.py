@@ -259,13 +259,19 @@ def resolve_recipients(actor_user, settings):
             if cleaned and "@" in cleaned:
                 resolved_emails.add(cleaned)
 
-    # Actor exclusion
-    if not settings.include_actor and actor_user:
+    # Actor inclusion / exclusion
+    actor_email = None
+    if actor_user:
         actor_email = frappe.db.get_value("User", actor_user, "email")
+
+    if settings.include_actor and actor_email:
+        # Explicitly add actor's own email to recipients
+        resolved_emails.add(actor_email.strip().lower())
+    elif not settings.include_actor and actor_user:
+        # Remove actor from recipient list
         actor_emails_to_remove = {actor_user.strip().lower()}
         if actor_email:
             actor_emails_to_remove.add(actor_email.strip().lower())
-
         resolved_emails = {em for em in resolved_emails if em not in actor_emails_to_remove}
 
     return sorted(list(resolved_emails))
