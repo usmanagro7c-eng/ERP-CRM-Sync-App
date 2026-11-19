@@ -500,17 +500,22 @@ def on_change(doc, method=None):
         app_base_url = settings.app_base_url or "https://pipedrive-crm.usman-agro7c.workers.dev"
 
         if doctype == "CRM Deal":
+            # CRM Deal has no 'deal_title' field — use organization_name or name as label
+            deal_label = getattr(doc, "organization_name", None) or getattr(doc, "organization", None) or doc.name
+            # Correct field names: deal_value (not annual_revenue), expected_closure_date (not expected_closing_date)
+            deal_value = getattr(doc, "deal_value", None) or getattr(doc, "annual_revenue", None) or 0
+
             if method == "after_insert":
                 if not settings.deal_updates:
                     return
                 recipients = resolve_recipients(actor_user, settings)
                 if not recipients:
                     return
-                subject = f"🎯 [New Deal] Deal \"{doc.deal_title or doc.name}\" created"
+                subject = f"🎯 [New Deal] Deal \"{deal_label}\" created"
                 content = format_entity_change_html(
                     app_base_url, doctype, doc.name, "Created",
-                    title=doc.deal_title,
-                    details={"Stage": doc.status, "Annual Revenue": f"PKR {doc.annual_revenue:,.2f}" if doc.annual_revenue else "0", "Organization": doc.organization},
+                    title=deal_label,
+                    details={"Stage": doc.status, "Deal Value": f"PKR {deal_value:,.2f}" if deal_value else "0", "Organization": doc.organization},
                     modified_by=actor_user
                 )
                 _enqueue_mail(recipients, subject, content, doctype, doc.name)
@@ -528,17 +533,17 @@ def on_change(doc, method=None):
                     if not recipients:
                         return
 
-                    subject = f"🎯 [Stage Alert] Deal \"{doc.deal_title or doc.name}\" moved to \"{to_stage}\""
+                    subject = f"🎯 [Stage Alert] Deal \"{deal_label}\" moved to \"{to_stage}\""
                     content = format_stage_change_html(
-                        app_base_url, doc.name, doc.deal_title,
-                        from_stage, to_stage, doc.organization, doc.annual_revenue, actor_user
+                        app_base_url, doc.name, deal_label,
+                        from_stage, to_stage, doc.organization, deal_value, actor_user
                     )
                     _enqueue_mail(recipients, subject, content, doctype, doc.name)
                 else:
                     if not settings.deal_updates:
                         return
-                    # Check if meaningful fields changed
-                    meaningful = ["annual_revenue", "organization", "lead", "deal_title", "probability", "expected_closing_date"]
+                    # Check if meaningful fields changed (using correct field names)
+                    meaningful = ["deal_value", "organization", "lead", "probability", "expected_closure_date", "organization_name"]
                     changed = [f for f in meaningful if doc.has_value_changed(f)]
                     if not changed:
                         return
@@ -548,10 +553,10 @@ def on_change(doc, method=None):
                         return
 
                     changed_details = {doc.meta.get_label(f) or f: getattr(doc, f) for f in changed}
-                    subject = f"[AgroCRM Alert] Deal \"{doc.deal_title or doc.name}\" updated"
+                    subject = f"[AgroCRM Alert] Deal \"{deal_label}\" updated"
                     content = format_entity_change_html(
                         app_base_url, doctype, doc.name, "Updated",
-                        title=doc.deal_title, details=changed_details, modified_by=actor_user
+                        title=deal_label, details=changed_details, modified_by=actor_user
                     )
                     _enqueue_mail(recipients, subject, content, doctype, doc.name)
 
