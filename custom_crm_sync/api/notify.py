@@ -427,21 +427,73 @@ def send_test_notification():
         frappe.throw(_("No recipients resolved for current user under mode '{0}'.").format(settings.mode))
 
     now = now_datetime().strftime("%d %b %Y, %I:%M %p")
-    subject = "✅ [AgroCRM] Test Notification Email"
+    subject = "[System Verification] AgroCRM Hierarchy Notification Test"
     content = f"""
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #10b981; border-radius: 12px; overflow: hidden; background-color: #ffffff;">
-      <div style="background: linear-gradient(135deg, #059669, #047857); padding: 20px 24px; color: #ffffff;">
-        <h2 style="margin: 0; font-size: 18px; font-weight: 700;">AgroCRM · Hierarchy Test Notification</h2>
-      </div>
-      <div style="padding: 24px; color: #334155; font-size: 13px; line-height: 1.6;">
-        <p>This is a live test notification sent from the <strong>Frappe CRM Hierarchy Notification System</strong>.</p>
-        <table style="width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 13px;">
-          <tr><td style="padding: 6px 0; color: #64748b; font-weight: 600; width: 140px;">Dispatched By:</td><td>{escape_html(frappe.session.user)}</td></tr>
-          <tr><td style="padding: 6px 0; color: #64748b; font-weight: 600;">Active Mode:</td><td><strong>{escape_html(settings.mode)}</strong></td></tr>
-          <tr><td style="padding: 6px 0; color: #64748b; font-weight: 600;">Date & Time:</td><td>{now}</td></tr>
-          <tr><td style="padding: 6px 0; color: #64748b; font-weight: 600;">Resolved Recipients:</td><td>{escape_html(', '.join(recipients))}</td></tr>
-        </table>
-      </div>
+    <div style="background-color: #f8fafc; padding: 24px 12px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; min-height: 100%;">
+      <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 640px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+        <tr>
+          <td style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 28px 32px; border-bottom: 3px solid #059669;">
+            <table border="0" cellpadding="0" cellspacing="0" width="100%">
+              <tr>
+                <td valign="top">
+                  <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #34d399; margin-bottom: 6px;">AgroCRM · Hierarchy Diagnostic</div>
+                  <h1 style="margin: 0; font-size: 20px; font-weight: 700; color: #ffffff; line-height: 1.3;">Hierarchy Verification Test</h1>
+                </td>
+                <td align="right" valign="top" style="width: 140px;">
+                  <span style="display: inline-block; background-color: rgba(255, 255, 255, 0.12); color: #cbd5e1; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 9999px;">Verified</span>
+                  <div style="color: #94a3b8; font-size: 11px; margin-top: 6px;">{now}</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 28px 32px;">
+            <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.6; color: #1e293b; font-weight: 600;">Dear Commercial Stakeholder,</p>
+            <p style="margin: 0 0 20px; font-size: 13.5px; line-height: 1.65; color: #334155;">
+              This test transmission validates live SMTP connectivity, organizational hierarchy routing, and delivery queue processing across the AgroCRM enterprise environment.
+            </p>
+            <div style="margin-bottom: 24px;">
+              <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #64748b; margin-bottom: 8px;">Diagnostic Parameters</div>
+              <table style="width: 100%; border-collapse: collapse; font-size: 13px; border: 1px solid #f1f5f9; border-radius: 6px; overflow: hidden;">
+                <tr style="background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+                  <td style="padding: 9px 12px; color: #64748b; font-weight: 600; width: 160px;">Dispatched By:</td>
+                  <td style="padding: 9px 12px; color: #0f172a; font-weight: 600;">{escape_html(frappe.session.user)}</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #f1f5f9;">
+                  <td style="padding: 9px 12px; color: #64748b; font-weight: 600;">Active Hierarchy Mode:</td>
+                  <td style="padding: 9px 12px; color: #0f172a; font-weight: 700;">{escape_html(settings.mode)}</td>
+                </tr>
+                <tr style="background-color: #f8fafc; border-bottom: 1px solid #f1f5f9;">
+                  <td style="padding: 9px 12px; color: #64748b; font-weight: 600;">Timestamp:</td>
+                  <td style="padding: 9px 12px; color: #0f172a;">{now}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 9px 12px; color: #64748b; font-weight: 600;">Resolved Recipients:</td>
+                  <td style="padding: 9px 12px; color: #0f172a; font-family: monospace; font-size: 12px;">{escape_html(', '.join(recipients))}</td>
+                </tr>
+              </table>
+            </div>
+            <div style="background-color: #ecfdf5; border-left: 4px solid #059669; padding: 12px 16px; border-radius: 0 6px 6px 0; margin-bottom: 24px; font-size: 12.5px; color: #065f46; line-height: 1.55;">
+              <strong>System Status:</strong> All hierarchy notification listeners and mail workers are functioning optimally.
+            </div>
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid #e2e8f0;">
+              <tr>
+                <td>
+                  <div style="font-size: 13px; color: #475569; margin-bottom: 3px;">Sincerely,</div>
+                  <div style="font-size: 13.5px; font-weight: 700; color: #0f172a;">AgroCRM Systems & Governance Administration</div>
+                  <div style="font-size: 12px; color: #64748b;">Enterprise Infrastructure Operations</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 32px; font-size: 11px; color: #94a3b8; line-height: 1.55;">
+            <strong style="color: #64748b;">Confidentiality & Compliance Notice:</strong> This test notification was dispatched by an authenticated system administrator for diagnostic validation.
+          </td>
+        </tr>
+      </table>
     </div>
     """.strip()
 
@@ -481,42 +533,131 @@ def format_stage_change_html(app_base_url, deal_id, deal_title, from_stage, to_s
     now = now_datetime().strftime("%d %b %Y, %I:%M %p")
     val_str = f"{deal_value:,.2f}" if isinstance(deal_value, (int, float)) else str(deal_value or "0")
 
+    stage_lower = str(to_stage or "").strip().lower()
+    to_stage_bg = "#0284c7"
+    to_stage_color = "#ffffff"
+    guidance_text = "Assigned sales representatives and regional supervisors should coordinate follow-up deliverables and milestone schedules."
+
+    if "won" in stage_lower:
+        to_stage_bg = "#059669"
+        to_stage_color = "#ffffff"
+        guidance_text = "Deal successfully won. Account managers are authorized to proceed with sales order generation, quotation execution, and contract delivery."
+    elif "lost" in stage_lower:
+        to_stage_bg = "#dc2626"
+        to_stage_color = "#ffffff"
+        guidance_text = "Deal marked as closed lost. Please review loss categorization, document feedback, and archive notes for quarterly commercial audits."
+    elif any(kw in stage_lower for kw in ["negotiation", "proposal", "quote", "demo"]):
+        to_stage_bg = "#0284c7"
+        to_stage_color = "#ffffff"
+        guidance_text = "Engagement in active negotiation/proposal review. Please verify that commercial pricing, credit terms, and quotation validity windows are up to date."
+
     from_stage_html = ""
     if from_stage:
         from_stage_html = f"""
-        <span style="background-color: #e2e8f0; color: #475569; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;">{escape_html(from_stage)}</span>
-        <span style="margin: 0 10px; font-size: 15px; color: #94a3b8;">➔</span>
+        <span style="background-color: #f1f5f9; color: #475569; padding: 5px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; border: 1px solid #e2e8f0;">Previous Stage: {escape_html(from_stage)}</span>
+        <span style="margin: 0 12px; font-size: 16px; color: #94a3b8; font-weight: bold;">➔</span>
         """
 
     org_row = ""
     if organization:
-        org_row = f'<tr><td style="padding: 8px 0; color: #64748b; font-weight: 600;">Organization:</td><td style="color: #0f172a;">{escape_html(organization)}</td></tr>'
+        org_row = f'<tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 9px 12px; color: #64748b; font-weight: 600; width: 150px;">Associated Account:</td><td style="padding: 9px 12px; color: #0f172a; font-weight: 600;">{escape_html(organization)}</td></tr>'
+
+    modifier_row = ""
+    if modified_by:
+        modifier_row = f'<tr style="background-color: #f8fafc; border-bottom: 1px solid #f1f5f9;"><td style="padding: 9px 12px; color: #64748b; font-weight: 600;">Updated By:</td><td style="padding: 9px 12px; color: #0f172a;">{escape_html(modified_by)}</td></tr>'
 
     return f"""
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 620px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
-      <div style="background: linear-gradient(135deg, #1e293b, #0f172a); padding: 22px 24px; color: #ffffff;">
-        <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-bottom: 4px; font-weight: 600;">AgroCRM · Deal Stage Alert</div>
-        <h1 style="margin: 0; font-size: 20px; font-weight: 700; color: #ffffff;">Deal Stage Changed</h1>
-      </div>
+    <div style="background-color: #f8fafc; padding: 24px 12px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; min-height: 100%;">
+      <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 640px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+        <!-- Corporate Navy Gradient Header -->
+        <tr>
+          <td style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 28px 32px; border-bottom: 3px solid #0284c7;">
+            <table border="0" cellpadding="0" cellspacing="0" width="100%">
+              <tr>
+                <td valign="top">
+                  <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #38bdf8; margin-bottom: 6px;">AgroCRM · Enterprise Pipeline Intelligence</div>
+                  <h1 style="margin: 0; font-size: 20px; font-weight: 700; color: #ffffff; line-height: 1.3;">Deal Stage Transition Notice</h1>
+                </td>
+                <td align="right" valign="top" style="width: 140px;">
+                  <span style="display: inline-block; background-color: rgba(255, 255, 255, 0.12); color: #cbd5e1; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 9999px; letter-spacing: 0.5px;">Ref: {escape_html(deal_id)}</span>
+                  <div style="color: #94a3b8; font-size: 11px; margin-top: 6px;">{now}</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
 
-      <div style="padding: 24px;">
-        <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; margin-bottom: 20px; text-align: center;">
-          {from_stage_html}
-          <span style="background-color: #10b981; color: #ffffff; padding: 4px 12px; border-radius: 6px; font-size: 12px; font-weight: 600;">New Stage: {escape_html(to_stage)}</span>
-        </div>
+        <!-- Body Content -->
+        <tr>
+          <td style="padding: 28px 32px;">
+            <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.6; color: #1e293b; font-weight: 600;">Dear Commercial Stakeholder,</p>
+            <p style="margin: 0 0 20px; font-size: 13.5px; line-height: 1.65; color: #334155;">
+              This official communication advises that the commercial deal referenced below has reached a new pipeline milestone within the sales management hierarchy. Details of the stage transition and commercial values are outlined below.
+            </p>
 
-        <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px;">
-          <tr><td style="padding: 8px 0; color: #64748b; font-weight: 600; width: 140px;">Deal:</td><td style="color: #0f172a; font-weight: bold;">{escape_html(deal_title or deal_id)} ({escape_html(deal_id)})</td></tr>
-          {org_row}
-          <tr><td style="padding: 8px 0; color: #64748b; font-weight: 600;">Deal Value:</td><td style="color: #0f172a; font-weight: bold;">PKR {escape_html(val_str)}</td></tr>
-          <tr><td style="padding: 8px 0; color: #64748b; font-weight: 600;">Modified By:</td><td style="color: #0f172a;">{escape_html(modified_by or '')}</td></tr>
-          <tr><td style="padding: 8px 0; color: #64748b; font-weight: 600;">Date & Time:</td><td style="color: #0f172a;">{now}</td></tr>
-        </table>
+            <!-- Stage Progression Visual Pill -->
+            <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 24px; text-align: center;">
+              <div style="display: inline-flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px;">
+                {from_stage_html}
+                <span style="background-color: {to_stage_bg}; color: {to_stage_color}; padding: 6px 14px; border-radius: 6px; font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; display: inline-block;">
+                  Current Stage: {escape_html(to_stage)}
+                </span>
+              </div>
+            </div>
 
-        <div style="text-align: center; margin-top: 24px;">
-          <a href="{deal_url}" style="background-color: #0f172a; color: #ffffff; padding: 10px 22px; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 600; display: inline-block;">View Deal in AgroCRM</a>
-        </div>
-      </div>
+            <!-- Deal Attributes Table -->
+            <div style="margin-bottom: 24px;">
+              <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #64748b; margin-bottom: 8px;">Commercial Deal Attributes</div>
+              <table style="width: 100%; border-collapse: collapse; font-size: 13px; border: 1px solid #f1f5f9; border-radius: 6px; overflow: hidden;">
+                <tr style="background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+                  <td style="padding: 9px 12px; color: #64748b; font-weight: 600; width: 150px;">Deal Reference:</td>
+                  <td style="padding: 9px 12px; color: #0f172a; font-weight: 700;">{escape_html(deal_title or deal_id)} <span style="font-weight: 500; color: #64748b;">({escape_html(deal_id)})</span></td>
+                </tr>
+                {org_row}
+                <tr style="border-bottom: 1px solid #f1f5f9;">
+                  <td style="padding: 9px 12px; color: #64748b; font-weight: 600;">Deal Valuation:</td>
+                  <td style="padding: 9px 12px; color: #0f172a; font-weight: 700; font-size: 14px;">PKR {escape_html(val_str)}</td>
+                </tr>
+                {modifier_row}
+                <tr>
+                  <td style="padding: 9px 12px; color: #64748b; font-weight: 600;">Recorded Timestamp:</td>
+                  <td style="padding: 9px 12px; color: #0f172a;">{now}</td>
+                </tr>
+              </table>
+            </div>
+
+            <!-- Operational Guidance Callout -->
+            <div style="background-color: #eff6ff; border-left: 4px solid #0284c7; padding: 12px 16px; border-radius: 0 6px 6px 0; margin-bottom: 24px; font-size: 12.5px; color: #1e40af; line-height: 1.55;">
+              <strong>Operational Guidance:</strong> {guidance_text}
+            </div>
+
+            <!-- Action Button -->
+            <div style="text-align: center; margin: 28px 0 20px;">
+              <a href="{deal_url}" style="background-color: #0f172a; color: #ffffff; padding: 11px 24px; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 600; display: inline-block; letter-spacing: 0.3px;">
+                Open Deal in AgroCRM ➔
+              </a>
+            </div>
+
+            <!-- Formal Sign-off -->
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid #e2e8f0;">
+              <tr>
+                <td>
+                  <div style="font-size: 13px; color: #475569; margin-bottom: 3px;">Sincerely,</div>
+                  <div style="font-size: 13.5px; font-weight: 700; color: #0f172a;">AgroCRM Commercial Pipeline & Sales Governance</div>
+                  <div style="font-size: 12px; color: #64748b;">Enterprise Sales & Distribution Operations</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- Footer & Disclaimer -->
+        <tr>
+          <td style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 32px; font-size: 11px; color: #94a3b8; line-height: 1.55;">
+            <strong style="color: #64748b;">Confidentiality & Compliance Notice:</strong> This automated notification is transmitted exclusively for authorized recipients within the sales hierarchy of AgroCRM. If you have received this communication in error, please disregard and notify the system administrator.
+          </td>
+        </tr>
+      </table>
     </div>
     """.strip()
 
@@ -529,34 +670,96 @@ def format_entity_change_html(app_base_url, doctype, docname, action, title=None
     if details and isinstance(details, dict):
         for k, v in details.items():
             if v is not None and v != "":
-                extra_rows += f'<tr><td style="padding: 6px 0; color: #64748b; font-weight: 600; width: 140px;">{escape_html(str(k))}:</td><td style="color: #0f172a;">{escape_html(str(v))}</td></tr>'
+                extra_rows += f'<tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #64748b; font-weight: 600; width: 150px;">{escape_html(str(k))}:</td><td style="padding: 8px 12px; color: #0f172a;">{escape_html(str(v))}</td></tr>'
 
-    title_row = f'<tr><td style="padding: 6px 0; color: #64748b; font-weight: 600;">Title / Name:</td><td style="color: #0f172a;">{escape_html(title)}</td></tr>' if title else ""
-    summary_row = f'<tr><td style="padding: 6px 0; color: #64748b; font-weight: 600;">Summary:</td><td style="color: #0f172a;">{escape_html(summary)}</td></tr>' if summary else ""
+    title_row = f'<tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #64748b; font-weight: 600;">Title / Name:</td><td style="padding: 8px 12px; color: #0f172a; font-weight: 600;">{escape_html(title)}</td></tr>' if title else ""
+    summary_banner = f'<div style="background-color: #f8fafc; border-left: 3px solid #0284c7; padding: 10px 14px; margin-bottom: 20px; font-size: 12.5px; color: #334155; line-height: 1.5;"><strong>Summary of Event:</strong> {escape_html(summary)}</div>' if summary else ""
+    modifier_row = f'<tr style="background-color: #f8fafc; border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #64748b; font-weight: 600;">Recorded By:</td><td style="padding: 8px 12px; color: #0f172a;">{escape_html(modified_by)}</td></tr>' if modified_by else ""
 
     return f"""
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 620px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
-      <div style="background: linear-gradient(135deg, #1e293b, #0f172a); padding: 22px 24px; color: #ffffff;">
-        <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-bottom: 4px; font-weight: 600;">AgroCRM · System Notification</div>
-        <h1 style="margin: 0; font-size: 20px; font-weight: 700; color: #ffffff;">{escape_html(doctype)} {escape_html(action)}</h1>
-      </div>
+    <div style="background-color: #f8fafc; padding: 24px 12px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; min-height: 100%;">
+      <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 640px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+        <!-- Header -->
+        <tr>
+          <td style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 28px 32px; border-bottom: 3px solid #0284c7;">
+            <table border="0" cellpadding="0" cellspacing="0" width="100%">
+              <tr>
+                <td valign="top">
+                  <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #38bdf8; margin-bottom: 6px;">AgroCRM · Enterprise Notification</div>
+                  <h1 style="margin: 0; font-size: 20px; font-weight: 700; color: #ffffff; line-height: 1.3;">{escape_html(doctype)} {escape_html(action)} Advisory</h1>
+                </td>
+                <td align="right" valign="top" style="width: 140px;">
+                  <span style="display: inline-block; background-color: rgba(255, 255, 255, 0.12); color: #cbd5e1; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 9999px; letter-spacing: 0.5px;">Ref: {escape_html(docname)}</span>
+                  <div style="color: #94a3b8; font-size: 11px; margin-top: 6px;">{now}</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
 
-      <div style="padding: 24px;">
-        <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px;">
-          <tr><td style="padding: 6px 0; color: #64748b; font-weight: 600; width: 140px;">Record Type:</td><td style="color: #0f172a; font-weight: 600;">{escape_html(doctype)}</td></tr>
-          <tr><td style="padding: 6px 0; color: #64748b; font-weight: 600;">Record ID:</td><td style="color: #0f172a; font-weight: bold;">{escape_html(docname)}</td></tr>
-          {title_row}
-          <tr><td style="padding: 6px 0; color: #64748b; font-weight: 600;">Action:</td><td style="color: #0f172a;"><span style="background-color: #f1f5f9; padding: 2px 8px; border-radius: 4px; font-weight: 600;">{escape_html(action)}</span></td></tr>
-          {summary_row}
-          {extra_rows}
-          <tr><td style="padding: 6px 0; color: #64748b; font-weight: 600;">Modified By:</td><td style="color: #0f172a;">{escape_html(modified_by or '')}</td></tr>
-          <tr><td style="padding: 6px 0; color: #64748b; font-weight: 600;">Date & Time:</td><td style="color: #0f172a;">{now}</td></tr>
-        </table>
+        <!-- Body -->
+        <tr>
+          <td style="padding: 28px 32px;">
+            <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.6; color: #1e293b; font-weight: 600;">Dear Commercial Stakeholder,</p>
+            <p style="margin: 0 0 20px; font-size: 13.5px; line-height: 1.65; color: #334155;">
+              This formal notification confirms an administrative or operational event recorded for <strong>{escape_html(doctype)}</strong> ({escape_html(docname)}) within the AgroCRM enterprise environment. Complete transaction attributes are detailed below.
+            </p>
 
-        <div style="text-align: center; margin-top: 24px;">
-          <a href="{record_url}" style="background-color: #0f172a; color: #ffffff; padding: 10px 22px; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 600; display: inline-block;">Open in AgroCRM</a>
-        </div>
-      </div>
+            {summary_banner}
+
+            <!-- Details Table -->
+            <div style="margin-bottom: 24px;">
+              <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #64748b; margin-bottom: 8px;">Record Attributes</div>
+              <table style="width: 100%; border-collapse: collapse; font-size: 13px; border: 1px solid #f1f5f9; border-radius: 6px; overflow: hidden;">
+                <tr style="background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+                  <td style="padding: 8px 12px; color: #64748b; font-weight: 600; width: 150px;">Record Entity:</td>
+                  <td style="padding: 8px 12px; color: #0f172a; font-weight: 600;">{escape_html(doctype)}</td>
+                </tr>
+                <tr style="border-bottom: 1px solid #f1f5f9;">
+                  <td style="padding: 8px 12px; color: #64748b; font-weight: 600;">Record Identifier:</td>
+                  <td style="padding: 8px 12px; color: #0f172a; font-weight: 700;">{escape_html(docname)}</td>
+                </tr>
+                {title_row}
+                <tr style="background-color: #f8fafc; border-bottom: 1px solid #f1f5f9;">
+                  <td style="padding: 8px 12px; color: #64748b; font-weight: 600;">Action Category:</td>
+                  <td style="padding: 8px 12px; color: #0f172a;"><span style="background-color: #e2e8f0; color: #334155; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 12px;">{escape_html(action)}</span></td>
+                </tr>
+                {extra_rows}
+                {modifier_row}
+                <tr>
+                  <td style="padding: 8px 12px; color: #64748b; font-weight: 600;">Timestamp:</td>
+                  <td style="padding: 8px 12px; color: #0f172a;">{now}</td>
+                </tr>
+              </table>
+            </div>
+
+            <!-- Button -->
+            <div style="text-align: center; margin: 28px 0 20px;">
+              <a href="{record_url}" style="background-color: #0f172a; color: #ffffff; padding: 11px 24px; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 600; display: inline-block; letter-spacing: 0.3px;">
+                Open {escape_html(doctype)} in AgroCRM ➔
+              </a>
+            </div>
+
+            <!-- Formal Sign-off -->
+            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid #e2e8f0;">
+              <tr>
+                <td>
+                  <div style="font-size: 13px; color: #475569; margin-bottom: 3px;">Sincerely,</div>
+                  <div style="font-size: 13.5px; font-weight: 700; color: #0f172a;">AgroCRM Enterprise Governance</div>
+                  <div style="font-size: 12px; color: #64748b;">Enterprise Sales & Distribution Operations</div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+          <td style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 32px; font-size: 11px; color: #94a3b8; line-height: 1.55;">
+            <strong style="color: #64748b;">Confidentiality & Compliance Notice:</strong> This automated notification is transmitted exclusively for authorized recipients within the sales hierarchy of AgroCRM. If you have received this communication in error, please disregard and notify the system administrator.
+          </td>
+        </tr>
+      </table>
     </div>
     """.strip()
 
@@ -775,7 +978,7 @@ def on_change(doc, method=None):
                 recipients = resolve_recipients(actor_user, settings)
                 if not recipients:
                     return
-                subject = f"🎯 [New Deal] Deal \"{deal_label}\" created"
+                subject = f"[New Deal Pipeline] Deal \"{deal_label}\" Initialized ({doc.name})"
                 content = format_entity_change_html(
                     app_base_url, doctype, doc.name, "Created",
                     title=deal_label,
@@ -797,7 +1000,14 @@ def on_change(doc, method=None):
                     if not recipients:
                         return
 
-                    subject = f"🎯 [Stage Alert] Deal \"{deal_label}\" moved to \"{to_stage}\""
+                    stage_lower = str(to_stage or "").strip().lower()
+                    if "won" in stage_lower:
+                        subject = f"[Deal Won] Commercial Deal \"{deal_label}\" Successfully Closed ({doc.name})"
+                    elif "lost" in stage_lower:
+                        subject = f"[Deal Pipeline] Commercial Deal \"{deal_label}\" Marked as Lost ({doc.name})"
+                    else:
+                        subject = f"[Deal Pipeline Progress] Deal \"{deal_label}\" Advanced to Stage: {to_stage} ({doc.name})"
+
                     content = format_stage_change_html(
                         app_base_url, doc.name, deal_label,
                         from_stage, to_stage, doc.organization, deal_value, actor_user
@@ -817,7 +1027,7 @@ def on_change(doc, method=None):
                         return
 
                     changed_details = {doc.meta.get_label(f) or f: getattr(doc, f) for f in changed}
-                    subject = f"[AgroCRM Alert] Deal \"{deal_label}\" updated"
+                    subject = f"[Deal Record Update] Deal \"{deal_label}\" Attributes Modified ({doc.name})"
                     content = format_entity_change_html(
                         app_base_url, doctype, doc.name, "Updated",
                         title=deal_label, details=changed_details, modified_by=actor_user
@@ -831,13 +1041,34 @@ def on_change(doc, method=None):
             if not recipients:
                 return
 
-            action = "Created" if method == "after_insert" else "Updated"
             lead_name = f"{doc.first_name or ''} {doc.last_name or ''}".strip() or doc.name
-            subject = f"[AgroCRM Alert] Lead \"{lead_name}\" was {action}"
+
+            if method == "after_insert":
+                action = "Created"
+                subject = f"[Lead Registration] New Lead \"{lead_name}\" Registered ({doc.name})"
+                details = {"Status": doc.status or "Open", "Organization": doc.organization, "Email": doc.email, "Mobile": doc.mobile_no}
+            elif doc.has_value_changed("status"):
+                prev_doc = doc.get_doc_before_save()
+                from_status = prev_doc.status if prev_doc else "None"
+                to_status = doc.status
+                action = "Status Changed"
+                subject = f"[Lead Status Notice] Lead \"{lead_name}\" Status Changed to \"{to_status}\" ({doc.name})"
+                details = {
+                    "Previous Status": from_status,
+                    "Updated Status": to_status,
+                    "Organization": doc.organization,
+                    "Email": doc.email,
+                    "Mobile": doc.mobile_no
+                }
+            else:
+                action = "Updated"
+                subject = f"[Lead Record Update] Lead \"{lead_name}\" Details Updated ({doc.name})"
+                details = {"Status": doc.status, "Organization": doc.organization, "Email": doc.email, "Mobile": doc.mobile_no}
+
             content = format_entity_change_html(
                 app_base_url, doctype, doc.name, action,
                 title=lead_name,
-                details={"Organization": doc.organization, "Email": doc.email, "Mobile": doc.mobile_no},
+                details=details,
                 modified_by=actor_user
             )
             dispatch_or_queue_notification(recipients, subject, content, doctype, doc.name)
@@ -849,8 +1080,16 @@ def on_change(doc, method=None):
             if not recipients:
                 return
 
-            action = "Created" if method == "after_insert" else "Updated"
-            subject = f"[AgroCRM Alert] Task \"{doc.title or doc.name}\" was {action}"
+            if method == "after_insert":
+                action = "Created"
+                subject = f"[Task Management] New Task \"{doc.title or doc.name}\" Assigned"
+            elif doc.has_value_changed("status"):
+                action = "Status Changed"
+                subject = f"[Task Status Notice] Task \"{doc.title or doc.name}\" Status Changed to \"{doc.status}\""
+            else:
+                action = "Updated"
+                subject = f"[Task Management Update] Task \"{doc.title or doc.name}\" Updated"
+
             content = format_entity_change_html(
                 app_base_url, doctype, doc.name, action,
                 title=doc.title,
