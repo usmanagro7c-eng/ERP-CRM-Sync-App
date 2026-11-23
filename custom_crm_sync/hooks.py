@@ -41,6 +41,11 @@ doc_events = {
 # Scheduled Tasks
 # ---------------
 scheduler_events = {
+    "cron": {
+        "* * * * *": [
+            "custom_crm_sync.api.notify.process_notification_queue"
+        ]
+    },
     "hourly": [
         "custom_crm_sync.api.sync.sync_recent_items",
         "custom_crm_sync.api.sync.sync_recent_customers",

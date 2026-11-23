@@ -1,8 +1,32 @@
 import json
 import traceback
+from datetime import timedelta
 import frappe
 from frappe import _
 from frappe.utils import escape_html, now_datetime, validate_email_address
+
+
+def _get_time_parts(value):
+    if not value:
+        return 0, 0
+    if isinstance(value, timedelta):
+        total_seconds = int(value.total_seconds())
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, _ = divmod(remainder, 60)
+        return hours, minutes
+    if hasattr(value, "hour") and hasattr(value, "minute"):
+        return value.hour, value.minute
+    try:
+        parts = str(value).strip().split(":")
+        return int(parts[0]), int(parts[1])
+    except Exception:
+        return 0, 0
+
+
+def _get_target_time(now, time_value):
+    """Build today's target datetime (naive, system timezone) from a time value."""
+    hour, minute = _get_time_parts(time_value)
+    return now.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
 
 def get_notification_settings_doc():
@@ -41,6 +65,10 @@ def get_notification_settings():
         "quotations": bool(settings.quotations),
         "sales_orders": bool(settings.sales_orders),
         "other_records": bool(settings.other_records),
+        "delivery_mode": "scheduled" if "sched" in (getattr(settings, "delivery_mode", None) or "").lower() else ("interval" if "interv" in (getattr(settings, "delivery_mode", None) or "").lower() else "instant"),
+        "scheduled_time": str(getattr(settings, "scheduled_time", None) or "09:00:00")[:5],
+        "interval_minutes": int(getattr(settings, "interval_minutes", None) or 60),
+        "delivery_schedule": getattr(settings, "delivery_schedule", None) or "",
     }
 
     # Fetch hierarchy tree nodes from "CRM Sales Hierarchy"
@@ -169,6 +197,28 @@ def save_notification_settings(payload=None):
         settings.set("selected_nodes", [])
         for n in nodes:
             settings.append("selected_nodes", {"node": n})
+
+    # Email Delivery Timing & Schedule
+    if "delivery_mode" in payload:
+        mode_val = str(payload.get("delivery_mode") or "Instant").strip().lower()
+        if "sched" in mode_val:
+            settings.delivery_mode = "Daily Scheduled"
+        elif "interv" in mode_val:
+            settings.delivery_mode = "Periodic Interval"
+        else:
+            settings.delivery_mode = "Instant"
+
+    if "scheduled_time" in payload:
+        settings.scheduled_time = payload.get("scheduled_time") or "09:00:00"
+
+    if "interval_minutes" in payload:
+        try:
+            settings.interval_minutes = int(payload.get("interval_minutes") or 60)
+        except (ValueError, TypeError):
+            settings.interval_minutes = 60
+
+    if "delivery_schedule" in payload:
+        settings.delivery_schedule = payload.get("delivery_schedule")
 
     settings.save(ignore_permissions=True)
     frappe.db.commit()
@@ -475,6 +525,123 @@ def format_entity_change_html(app_base_url, doctype, docname, action, title=None
 # HOOKS & DISPATCH LOGIC
 # ─────────────────────────────────────────────
 
+def dispatch_or_queue_notification(recipients, subject, content, reference_doctype, reference_name):
+    """
+    Decides whether to dispatch immediately or buffer into CRM Pending Notification.
+    Instant mode: sends immediately.
+    Scheduled or Periodic Interval: buffers into pending queue.
+    """
+    if not recipients:
+        return
+
+    settings = get_notification_settings_doc()
+    mode = (getattr(settings, "delivery_mode", None) or "Instant").strip().lower()
+
+    if mode in ["instant", ""]:
+        _enqueue_mail(recipients, subject, content, reference_doctype, reference_name)
+    else:
+        try:
+            recips_str = ", ".join(recipients) if isinstance(recipients, list) else str(recipients)
+            pending = frappe.get_doc({
+                "doctype": "CRM Pending Notification",
+                "status": "Pending",
+                "reference_doctype": reference_doctype,
+                "reference_name": reference_name,
+                "recipients": recips_str,
+                "subject": subject,
+                "content": content
+            })
+            pending.insert(ignore_permissions=True)
+            frappe.db.commit()
+        except Exception as e:
+            frappe.log_error(frappe.get_traceback(), f"dispatch_or_queue_notification buffer error: {str(e)}")
+            _enqueue_mail(recipients, subject, content, reference_doctype, reference_name)
+
+
+@frappe.whitelist()
+def process_notification_queue():
+    """
+    Triggered every minute by cron '* * * * *'.
+    Evaluates whether daily scheduled time has arrived or periodic interval has elapsed,
+    and dispatches all pending notifications.
+    """
+    try:
+        settings = get_notification_settings_doc()
+        if not settings or not settings.enabled:
+            return
+
+        mode = (getattr(settings, "delivery_mode", None) or "Instant").strip().lower()
+        if mode in ["instant", ""]:
+            return
+
+        now = now_datetime()
+        today = frappe.utils.getdate(now)
+        should_send = False
+
+        if "sched" in mode:
+            # Daily Scheduled Time evaluation (from notification_templates pattern)
+            scheduled_time = getattr(settings, "scheduled_time", None) or "09:00:00"
+            target = _get_target_time(now, scheduled_time)
+            raw_last_run = getattr(settings, "last_dispatched", None)
+
+            already_sent_today = False
+            if raw_last_run:
+                last_run = frappe.utils.get_datetime(raw_last_run)
+                already_sent_today = (frappe.utils.getdate(last_run) == today and last_run >= target)
+
+            if now >= target and not already_sent_today:
+                should_send = True
+
+        elif "interv" in mode:
+            # Periodic Interval evaluation (from notification_templates pattern)
+            interval_mins = int(getattr(settings, "interval_minutes", None) or 60)
+            interval_delta = timedelta(minutes=interval_mins)
+            raw_last_run = getattr(settings, "last_dispatched", None)
+
+            if not raw_last_run:
+                should_send = True
+            else:
+                last_run = frappe.utils.get_datetime(raw_last_run)
+                if (now - last_run) >= interval_delta:
+                    should_send = True
+
+        if not should_send:
+            return
+
+        # Fetch pending notifications
+        if not frappe.db.exists("DocType", "CRM Pending Notification"):
+            return
+
+        pending_records = frappe.get_all(
+            "CRM Pending Notification",
+            filters={"status": "Pending"},
+            fields=["name", "recipients", "subject", "content", "reference_doctype", "reference_name"],
+            order_by="creation asc",
+            limit=200
+        )
+
+        if not pending_records:
+            frappe.db.set_single_value("CRM Notification Settings", "last_dispatched", now, update_modified=False)
+            return
+
+        for item in pending_records:
+            recips = [r.strip() for r in item.recipients.split(",") if r.strip()]
+            _enqueue_mail(
+                recipients=recips,
+                subject=item.subject,
+                content=item.content,
+                reference_doctype=item.reference_doctype,
+                reference_name=item.reference_name
+            )
+            frappe.db.set_value("CRM Pending Notification", item.name, "status", "Dispatched")
+
+        frappe.db.set_single_value("CRM Notification Settings", "last_dispatched", now, update_modified=False)
+        frappe.db.commit()
+
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), f"process_notification_queue error: {str(e)}")
+
+
 def on_change(doc, method=None):
     """
     Unified doc_events hook handler for CRM records.
@@ -524,7 +691,7 @@ def on_change(doc, method=None):
                     details={"Stage": doc.status, "Deal Value": f"PKR {deal_value:,.2f}" if deal_value else "0", "Organization": doc.organization},
                     modified_by=actor_user
                 )
-                _enqueue_mail(recipients, subject, content, doctype, doc.name)
+                dispatch_or_queue_notification(recipients, subject, content, doctype, doc.name)
 
             elif method == "on_update":
                 has_stage_changed = doc.has_value_changed("status")
@@ -544,7 +711,7 @@ def on_change(doc, method=None):
                         app_base_url, doc.name, deal_label,
                         from_stage, to_stage, doc.organization, deal_value, actor_user
                     )
-                    _enqueue_mail(recipients, subject, content, doctype, doc.name)
+                    dispatch_or_queue_notification(recipients, subject, content, doctype, doc.name)
                 else:
                     if not settings.deal_updates:
                         return
@@ -564,7 +731,7 @@ def on_change(doc, method=None):
                         app_base_url, doctype, doc.name, "Updated",
                         title=deal_label, details=changed_details, modified_by=actor_user
                     )
-                    _enqueue_mail(recipients, subject, content, doctype, doc.name)
+                    dispatch_or_queue_notification(recipients, subject, content, doctype, doc.name)
 
         elif doctype == "CRM Lead":
             if not settings.leads:
@@ -582,7 +749,7 @@ def on_change(doc, method=None):
                 details={"Organization": doc.organization, "Email": doc.email, "Mobile": doc.mobile_no},
                 modified_by=actor_user
             )
-            _enqueue_mail(recipients, subject, content, doctype, doc.name)
+            dispatch_or_queue_notification(recipients, subject, content, doctype, doc.name)
 
         elif doctype == "CRM Task":
             if not settings.tasks:
@@ -599,7 +766,7 @@ def on_change(doc, method=None):
                 details={"Status": doc.status, "Priority": doc.priority, "Due Date": str(doc.due_date or "")},
                 modified_by=actor_user
             )
-            _enqueue_mail(recipients, subject, content, doctype, doc.name)
+            dispatch_or_queue_notification(recipients, subject, content, doctype, doc.name)
 
         elif doctype in ["CRM Organization", "Contact"]:
             if not settings.other_records:
@@ -615,7 +782,7 @@ def on_change(doc, method=None):
                 app_base_url, doctype, doc.name, action,
                 title=title, modified_by=actor_user
             )
-            _enqueue_mail(recipients, subject, content, doctype, doc.name)
+            dispatch_or_queue_notification(recipients, subject, content, doctype, doc.name)
 
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), f"Hierarchy notify on_change failed: {str(e)}")
@@ -653,7 +820,7 @@ def notify_entity(doctype, docname, action, details=None, crm_deal=None, actor_u
             title=docname, details=details, modified_by=effective_actor or "ERPNext Webhook"
         )
 
-        _enqueue_mail(recipients, subject, content, doctype, docname)
+        dispatch_or_queue_notification(recipients, subject, content, doctype, docname)
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), f"notify_entity failed for {doctype} {docname}: {str(e)}")
 
