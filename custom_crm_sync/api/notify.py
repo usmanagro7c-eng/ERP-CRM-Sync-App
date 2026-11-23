@@ -29,6 +29,44 @@ def _get_target_time(now, time_value):
     return now.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
 
+def get_delivery_config(settings):
+    """
+    Safely extract delivery configuration.
+    Supports both direct DocType fields (post-migration) and delivery_schedule JSON string (pre-migration).
+    Returns (delivery_mode, scheduled_time, interval_minutes).
+    """
+    if not settings:
+        return "instant", "09:00", 60
+
+    sched_json = {}
+    raw_schedule = getattr(settings, "delivery_schedule", None)
+    if raw_schedule:
+        try:
+            sched_json = json.loads(raw_schedule)
+        except Exception:
+            sched_json = {}
+
+    raw_mode = getattr(settings, "delivery_mode", None) or sched_json.get("delivery_mode") or "Instant"
+    mode_str = str(raw_mode).strip().lower()
+    if "sched" in mode_str:
+        delivery_mode = "scheduled"
+    elif "interv" in mode_str:
+        delivery_mode = "interval"
+    else:
+        delivery_mode = "instant"
+
+    raw_time = getattr(settings, "scheduled_time", None) or sched_json.get("scheduled_time") or "09:00"
+    scheduled_time = str(raw_time)[:5]
+
+    try:
+        raw_interval = getattr(settings, "interval_minutes", None) or sched_json.get("interval_minutes") or 60
+        interval_minutes = int(raw_interval)
+    except Exception:
+        interval_minutes = 60
+
+    return delivery_mode, scheduled_time, interval_minutes
+
+
 def get_notification_settings_doc():
     """Return the CRM Notification Settings single doc or None if not installed yet."""
     if not frappe.db.exists("DocType", "CRM Notification Settings"):
@@ -51,6 +89,7 @@ def get_notification_settings():
 
     selected_nodes = [d.node for d in (settings.selected_nodes or []) if d.node]
 
+    delivery_mode, scheduled_time, interval_minutes = get_delivery_config(settings)
     settings_dict = {
         "enabled": bool(settings.enabled),
         "mode": settings.mode or "All Ancestors",
@@ -65,10 +104,11 @@ def get_notification_settings():
         "quotations": bool(settings.quotations),
         "sales_orders": bool(settings.sales_orders),
         "other_records": bool(settings.other_records),
-        "delivery_mode": "scheduled" if "sched" in (getattr(settings, "delivery_mode", None) or "").lower() else ("interval" if "interv" in (getattr(settings, "delivery_mode", None) or "").lower() else "instant"),
-        "scheduled_time": str(getattr(settings, "scheduled_time", None) or "09:00:00")[:5],
-        "interval_minutes": int(getattr(settings, "interval_minutes", None) or 60),
+        "delivery_mode": delivery_mode,
+        "scheduled_time": scheduled_time,
+        "interval_minutes": interval_minutes,
         "delivery_schedule": getattr(settings, "delivery_schedule", None) or "",
+        "last_dispatched": str(getattr(settings, "last_dispatched", None) or ""),
     }
 
     # Fetch hierarchy tree nodes from "CRM Sales Hierarchy"
@@ -535,9 +575,9 @@ def dispatch_or_queue_notification(recipients, subject, content, reference_docty
         return
 
     settings = get_notification_settings_doc()
-    mode = (getattr(settings, "delivery_mode", None) or "Instant").strip().lower()
+    delivery_mode, scheduled_time, interval_minutes = get_delivery_config(settings)
 
-    if mode in ["instant", ""]:
+    if delivery_mode == "instant":
         _enqueue_mail(recipients, subject, content, reference_doctype, reference_name)
     else:
         try:
@@ -564,23 +604,23 @@ def process_notification_queue():
     Triggered every minute by cron '* * * * *'.
     Evaluates whether daily scheduled time has arrived or periodic interval has elapsed,
     and dispatches all pending notifications.
+    Can also be manually triggered by System Managers.
     """
     try:
         settings = get_notification_settings_doc()
         if not settings or not settings.enabled:
-            return
+            return {"dispatched": 0, "status": "disabled"}
 
-        mode = (getattr(settings, "delivery_mode", None) or "Instant").strip().lower()
-        if mode in ["instant", ""]:
-            return
+        delivery_mode, scheduled_time, interval_minutes = get_delivery_config(settings)
+        if delivery_mode == "instant":
+            return {"dispatched": 0, "status": "instant_mode"}
 
         now = now_datetime()
         today = frappe.utils.getdate(now)
         should_send = False
 
-        if "sched" in mode:
+        if delivery_mode == "scheduled":
             # Daily Scheduled Time evaluation (from notification_templates pattern)
-            scheduled_time = getattr(settings, "scheduled_time", None) or "09:00:00"
             target = _get_target_time(now, scheduled_time)
             raw_last_run = getattr(settings, "last_dispatched", None)
 
@@ -592,10 +632,9 @@ def process_notification_queue():
             if now >= target and not already_sent_today:
                 should_send = True
 
-        elif "interv" in mode:
+        elif delivery_mode == "interval":
             # Periodic Interval evaluation (from notification_templates pattern)
-            interval_mins = int(getattr(settings, "interval_minutes", None) or 60)
-            interval_delta = timedelta(minutes=interval_mins)
+            interval_delta = timedelta(minutes=interval_minutes)
             raw_last_run = getattr(settings, "last_dispatched", None)
 
             if not raw_last_run:
@@ -606,11 +645,11 @@ def process_notification_queue():
                     should_send = True
 
         if not should_send:
-            return
+            return {"dispatched": 0, "status": "not_due"}
 
         # Fetch pending notifications
         if not frappe.db.exists("DocType", "CRM Pending Notification"):
-            return
+            return {"dispatched": 0, "status": "no_pending_doctype"}
 
         pending_records = frappe.get_all(
             "CRM Pending Notification",
@@ -622,8 +661,9 @@ def process_notification_queue():
 
         if not pending_records:
             frappe.db.set_single_value("CRM Notification Settings", "last_dispatched", now, update_modified=False)
-            return
+            return {"dispatched": 0, "status": "empty_queue"}
 
+        dispatched_count = 0
         for item in pending_records:
             recips = [r.strip() for r in item.recipients.split(",") if r.strip()]
             _enqueue_mail(
@@ -634,12 +674,63 @@ def process_notification_queue():
                 reference_name=item.reference_name
             )
             frappe.db.set_value("CRM Pending Notification", item.name, "status", "Dispatched")
+            dispatched_count += 1
 
         frappe.db.set_single_value("CRM Notification Settings", "last_dispatched", now, update_modified=False)
         frappe.db.commit()
+        return {"dispatched": dispatched_count, "status": "success"}
 
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), f"process_notification_queue error: {str(e)}")
+        return {"dispatched": 0, "status": "error", "error": str(e)}
+
+
+@frappe.whitelist()
+def get_queue_status():
+    """
+    Return current queue status, delivery mode, pending count, and recent email dispatches.
+    Accessible to authenticated users.
+    """
+    if frappe.session.user == "Guest":
+        frappe.throw(_("Authentication required."), frappe.PermissionError)
+
+    settings = get_notification_settings_doc()
+    delivery_mode, scheduled_time, interval_minutes = get_delivery_config(settings)
+
+    pending_count = 0
+    dispatched_count = 0
+    pending_items = []
+
+    if frappe.db.exists("DocType", "CRM Pending Notification"):
+        pending_count = frappe.db.count("CRM Pending Notification", {"status": "Pending"})
+        dispatched_count = frappe.db.count("CRM Pending Notification", {"status": "Dispatched"})
+        pending_items = frappe.get_all(
+            "CRM Pending Notification",
+            fields=["name", "status", "reference_doctype", "reference_name", "recipients", "subject", "creation"],
+            order_by="creation desc",
+            limit=10
+        )
+
+    # Also inspect recent Frappe Email Queue
+    recent_emails = []
+    if frappe.db.exists("DocType", "Email Queue"):
+        recent_emails = frappe.get_all(
+            "Email Queue",
+            fields=["name", "status", "sender", "creation", "modified"],
+            order_by="creation desc",
+            limit=5
+        )
+
+    return {
+        "delivery_mode": delivery_mode,
+        "scheduled_time": scheduled_time,
+        "interval_minutes": interval_minutes,
+        "last_dispatched": str(getattr(settings, "last_dispatched", None) or ""),
+        "pending_count": pending_count,
+        "dispatched_count": dispatched_count,
+        "pending_items": pending_items,
+        "recent_emails": recent_emails,
+    }
 
 
 def on_change(doc, method=None):
