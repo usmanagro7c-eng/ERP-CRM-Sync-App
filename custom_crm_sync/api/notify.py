@@ -294,7 +294,7 @@ def _get_default_user_settings_dict(user):
         "enabled": 1,
         "email": user_email,
         "alternate_email": "",
-        "delivery_mode": "Instant",
+        "delivery_mode": "instant",
         "scheduled_time": "09:00",
         "interval_minutes": 60,
         "deal_stage_change": 1,
@@ -331,13 +331,15 @@ def get_user_notification_settings(user=None):
             raw_sched = str(getattr(row, "scheduled_time", "09:00:00") or "09:00:00")
             sched_parts = raw_sched.split(":") if ":" in raw_sched else ["09", "00"]
             clean_sched = f"{sched_parts[0].zfill(2)}:{sched_parts[1].zfill(2)}" if len(sched_parts) >= 2 else "09:00"
+            dm_raw = str(getattr(row, "delivery_mode", "Instant") or "Instant").strip().lower()
+            clean_dm = "scheduled" if "sched" in dm_raw else ("interval" if "interv" in dm_raw else "instant")
             return {
                 "name": getattr(row, "name", None),
                 "user": row.user,
                 "enabled": int(row.enabled) if getattr(row, "enabled", None) is not None else 1,
                 "email": getattr(row, "email", "") or target_user,
                 "alternate_email": getattr(row, "alternate_email", "") or "",
-                "delivery_mode": getattr(row, "delivery_mode", "Instant") or "Instant",
+                "delivery_mode": clean_dm,
                 "scheduled_time": clean_sched,
                 "interval_minutes": int(getattr(row, "interval_minutes", 60) or 60),
                 "deal_stage_change": int(row.deal_stage_change) if getattr(row, "deal_stage_change", None) is not None else 1,
