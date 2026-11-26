@@ -25,7 +25,9 @@
   "scheduled_time",
   "interval_minutes",
   "last_dispatched",
-  "delivery_schedule"
+  "delivery_schedule",
+  "section_user_settings",
+  "user_settings"
  ],
  "fields": [
   {
@@ -154,6 +156,17 @@
    "fieldname": "delivery_schedule",
    "fieldtype": "Small Text",
    "label": "Delivery Schedule (JSON)"
+  },
+  {
+   "fieldname": "section_user_settings",
+   "fieldtype": "Section Break",
+   "label": "User Notification Preferences"
+  },
+  {
+   "fieldname": "user_settings",
+   "fieldtype": "Table",
+   "label": "User Notification Settings",
+   "options": "CRM User Notification Setting"
   }
  ],
  "index_web_pages_for_search": 0,

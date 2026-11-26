@@ -111,6 +111,28 @@ def get_notification_settings():
         "last_dispatched": str(getattr(settings, "last_dispatched", None) or ""),
     }
 
+    user_settings = []
+    for u in (getattr(settings, "user_settings", None) or []):
+        user_settings.append({
+            "name": getattr(u, "name", None),
+            "user": getattr(u, "user", ""),
+            "enabled": int(u.enabled) if getattr(u, "enabled", None) is not None else 1,
+            "email": getattr(u, "email", "") or "",
+            "alternate_email": getattr(u, "alternate_email", "") or "",
+            "delivery_mode": getattr(u, "delivery_mode", "Instant") or "Instant",
+            "scheduled_time": str(getattr(u, "scheduled_time", "09:00:00") or "09:00:00")[:5],
+            "interval_minutes": int(getattr(u, "interval_minutes", 60) or 60),
+            "deal_stage_change": int(u.deal_stage_change) if getattr(u, "deal_stage_change", None) is not None else 1,
+            "deal_updates": int(u.deal_updates) if getattr(u, "deal_updates", None) is not None else 1,
+            "leads": int(u.leads) if getattr(u, "leads", None) is not None else 1,
+            "tasks": int(u.tasks) if getattr(u, "tasks", None) is not None else 1,
+            "quotations": int(u.quotations) if getattr(u, "quotations", None) is not None else 1,
+            "sales_orders": int(u.sales_orders) if getattr(u, "sales_orders", None) is not None else 1,
+            "other_records": int(u.other_records) if getattr(u, "other_records", None) is not None else 1,
+            "notify_own_actions": int(u.notify_own_actions) if getattr(u, "notify_own_actions", None) is not None else 0,
+        })
+    settings_dict["user_settings"] = user_settings
+
     # Fetch hierarchy tree nodes from "CRM Sales Hierarchy"
     tree_nodes = []
     if frappe.db.exists("DocType", "CRM Sales Hierarchy"):
@@ -263,6 +285,210 @@ def save_notification_settings(payload=None):
     settings.save(ignore_permissions=True)
     frappe.db.commit()
     return {"success": True}
+
+
+def _get_default_user_settings_dict(user):
+    user_email = frappe.db.get_value("User", user, "email") or user
+    return {
+        "user": user,
+        "enabled": 1,
+        "email": user_email,
+        "alternate_email": "",
+        "delivery_mode": "Instant",
+        "scheduled_time": "09:00",
+        "interval_minutes": 60,
+        "deal_stage_change": 1,
+        "deal_updates": 1,
+        "leads": 1,
+        "tasks": 1,
+        "quotations": 1,
+        "sales_orders": 1,
+        "other_records": 1,
+        "notify_own_actions": 0,
+    }
+
+
+@frappe.whitelist()
+def get_user_notification_settings(user=None):
+    """
+    Get personal notification settings for a specific user.
+    Regular users can only view their own settings; System/Sales Managers can view any user's settings.
+    """
+    if frappe.session.user == "Guest":
+        frappe.throw(_("Authentication required."), frappe.PermissionError)
+
+    target_user = user or frappe.session.user
+    user_roles = frappe.get_roles(frappe.session.user)
+    if target_user != frappe.session.user and "System Manager" not in user_roles and "Sales Manager" not in user_roles:
+        target_user = frappe.session.user
+
+    settings = get_notification_settings_doc()
+    if not settings:
+        return _get_default_user_settings_dict(target_user)
+
+    for row in (getattr(settings, "user_settings", None) or []):
+        if row.user and row.user.strip().lower() == target_user.strip().lower():
+            return {
+                "name": getattr(row, "name", None),
+                "user": row.user,
+                "enabled": int(row.enabled) if getattr(row, "enabled", None) is not None else 1,
+                "email": getattr(row, "email", "") or target_user,
+                "alternate_email": getattr(row, "alternate_email", "") or "",
+                "delivery_mode": getattr(row, "delivery_mode", "Instant") or "Instant",
+                "scheduled_time": str(getattr(row, "scheduled_time", "09:00:00") or "09:00:00")[:5],
+                "interval_minutes": int(getattr(row, "interval_minutes", 60) or 60),
+                "deal_stage_change": int(row.deal_stage_change) if getattr(row, "deal_stage_change", None) is not None else 1,
+                "deal_updates": int(row.deal_updates) if getattr(row, "deal_updates", None) is not None else 1,
+                "leads": int(row.leads) if getattr(row, "leads", None) is not None else 1,
+                "tasks": int(row.tasks) if getattr(row, "tasks", None) is not None else 1,
+                "quotations": int(row.quotations) if getattr(row, "quotations", None) is not None else 1,
+                "sales_orders": int(row.sales_orders) if getattr(row, "sales_orders", None) is not None else 1,
+                "other_records": int(row.other_records) if getattr(row, "other_records", None) is not None else 1,
+                "notify_own_actions": int(row.notify_own_actions) if getattr(row, "notify_own_actions", None) is not None else 0,
+            }
+
+    return _get_default_user_settings_dict(target_user)
+
+
+@frappe.whitelist()
+def save_user_notification_settings(payload=None):
+    """
+    Save personal notification settings for the authenticated user into CRM Notification Settings child table.
+    Any authenticated user can update their own preferences.
+    """
+    if frappe.session.user == "Guest":
+        frappe.throw(_("Authentication required."), frappe.PermissionError)
+
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            frappe.throw(_("Invalid JSON payload."))
+
+    if not isinstance(payload, dict):
+        payload = dict(frappe.form_dict)
+
+    # Regular users can only update their own settings
+    target_user = payload.get("user") or frappe.session.user
+    user_roles = frappe.get_roles(frappe.session.user)
+    if target_user != frappe.session.user and "System Manager" not in user_roles and "Sales Manager" not in user_roles:
+        target_user = frappe.session.user
+
+    settings = get_notification_settings_doc()
+    if not settings:
+        frappe.throw(_("CRM Notification Settings DocType is not available on this site."))
+
+    matched_row = None
+    for row in (getattr(settings, "user_settings", None) or []):
+        if row.user and row.user.strip().lower() == target_user.strip().lower():
+            matched_row = row
+            break
+
+    if not matched_row:
+        matched_row = settings.append("user_settings", {"user": target_user})
+
+    if "enabled" in payload:
+        matched_row.enabled = 1 if payload.get("enabled") else 0
+    if "email" in payload:
+        matched_row.email = (payload.get("email") or target_user).strip()
+    if "alternate_email" in payload:
+        matched_row.alternate_email = (payload.get("alternate_email") or "").strip()
+
+    if "delivery_mode" in payload:
+        dm = str(payload.get("delivery_mode") or "Instant").strip().lower()
+        matched_row.delivery_mode = "Daily Scheduled" if "sched" in dm else ("Periodic Interval" if "interv" in dm else "Instant")
+    if "scheduled_time" in payload:
+        matched_row.scheduled_time = payload.get("scheduled_time") or "09:00:00"
+    if "interval_minutes" in payload:
+        try:
+            matched_row.interval_minutes = int(payload.get("interval_minutes") or 60)
+        except (ValueError, TypeError):
+            matched_row.interval_minutes = 60
+
+    for evt in ["deal_stage_change", "deal_updates", "leads", "tasks", "quotations", "sales_orders", "other_records", "notify_own_actions"]:
+        if evt in payload:
+            setattr(matched_row, evt, 1 if payload.get(evt) else 0)
+
+    settings.save(ignore_permissions=True)
+    frappe.db.commit()
+    return {"success": True}
+
+
+def filter_recipients_by_user_preferences(recipients, event_type, actor_user, settings):
+    """
+    Filter resolved recipient email addresses against each user's personal preferences
+    stored in the `user_settings` child table of CRM Notification Settings.
+    - If user disabled notifications entirely (enabled=0), excludes them.
+    - If user disabled this specific event_type (e.g. quotations=0), excludes them.
+    - If recipient is the actor and has notify_own_actions=0, excludes them.
+    - Appends any alternate_email configured by the user.
+    """
+    if not recipients or not settings:
+        return recipients
+
+    user_settings_list = getattr(settings, "user_settings", None) or []
+    if not user_settings_list:
+        return recipients
+
+    # Build mapping by user email and user id
+    pref_by_user = {}
+    for row in user_settings_list:
+        if getattr(row, "user", None):
+            pref_by_user[row.user.strip().lower()] = row
+        if getattr(row, "email", None):
+            pref_by_user[row.email.strip().lower()] = row
+
+    # Also map recipient emails to User document names if different
+    email_to_user = {}
+    missing_emails = [em for em in recipients if em.lower() not in pref_by_user]
+    if missing_emails:
+        try:
+            user_matches = frappe.get_all("User", filters={"email": ["in", missing_emails]}, fields=["name", "email"])
+            for u in user_matches:
+                if u.email:
+                    email_to_user[u.email.strip().lower()] = u.name.strip().lower()
+        except Exception:
+            pass
+
+    filtered = set()
+    actor_lower = (actor_user or "").strip().lower()
+
+    for em in recipients:
+        em_lower = em.strip().lower()
+        user_id = email_to_user.get(em_lower, em_lower)
+        user_pref = pref_by_user.get(em_lower) or pref_by_user.get(user_id)
+
+        if user_pref:
+            # Check 1: User master enabled switch
+            if not getattr(user_pref, "enabled", 1):
+                continue
+
+            # Check 2: Event-specific toggle
+            if event_type and hasattr(user_pref, event_type):
+                if not getattr(user_pref, event_type, 1):
+                    continue
+
+            # Check 3: Self-action check
+            is_actor = (em_lower == actor_lower or user_id == actor_lower)
+            if is_actor and not getattr(user_pref, "notify_own_actions", 0):
+                continue
+
+            # Check 4: Preferred email vs login email
+            target_email = getattr(user_pref, "email", None) or em
+            filtered.add(target_email.strip().lower())
+
+            # Check 5: Alternate email / CC
+            alt = getattr(user_pref, "alternate_email", None)
+            if alt and "@" in alt:
+                for a in alt.replace("\n", ",").split(","):
+                    a_clean = a.strip().lower()
+                    if a_clean and "@" in a_clean:
+                        filtered.add(a_clean)
+        else:
+            # User has no custom row yet -> use global settings defaults
+            filtered.add(em_lower)
+
+    return sorted(list(filtered))
 
 
 def resolve_recipients(actor_user, settings):
@@ -976,6 +1202,7 @@ def on_change(doc, method=None):
                 if not settings.deal_updates:
                     return
                 recipients = resolve_recipients(actor_user, settings)
+                recipients = filter_recipients_by_user_preferences(recipients, "deal_updates", actor_user, settings)
                 if not recipients:
                     return
                 subject = f"[New Deal Pipeline] Deal \"{deal_label}\" Initialized ({doc.name})"
@@ -997,6 +1224,7 @@ def on_change(doc, method=None):
                     to_stage = doc.status
 
                     recipients = resolve_recipients(actor_user, settings)
+                    recipients = filter_recipients_by_user_preferences(recipients, "deal_stage_change", actor_user, settings)
                     if not recipients:
                         return
 
@@ -1023,6 +1251,7 @@ def on_change(doc, method=None):
                         return
 
                     recipients = resolve_recipients(actor_user, settings)
+                    recipients = filter_recipients_by_user_preferences(recipients, "deal_updates", actor_user, settings)
                     if not recipients:
                         return
 
@@ -1038,6 +1267,7 @@ def on_change(doc, method=None):
             if not settings.leads:
                 return
             recipients = resolve_recipients(actor_user, settings)
+            recipients = filter_recipients_by_user_preferences(recipients, "leads", actor_user, settings)
             if not recipients:
                 return
 
@@ -1077,6 +1307,7 @@ def on_change(doc, method=None):
             if not settings.tasks:
                 return
             recipients = resolve_recipients(actor_user, settings)
+            recipients = filter_recipients_by_user_preferences(recipients, "tasks", actor_user, settings)
             if not recipients:
                 return
 
@@ -1102,6 +1333,7 @@ def on_change(doc, method=None):
             if not settings.other_records:
                 return
             recipients = resolve_recipients(actor_user, settings)
+            recipients = filter_recipients_by_user_preferences(recipients, "other_records", actor_user, settings)
             if not recipients:
                 return
 
@@ -1140,6 +1372,8 @@ def notify_entity(doctype, docname, action, details=None, crm_deal=None, actor_u
             effective_actor = frappe.db.get_value("CRM Deal", crm_deal, "owner")
 
         recipients = resolve_recipients(effective_actor, settings)
+        event_key = "quotations" if doctype == "Quotation" else ("sales_orders" if doctype == "Sales Order" else "other_records")
+        recipients = filter_recipients_by_user_preferences(recipients, event_key, effective_actor, settings)
         if not recipients:
             return
 

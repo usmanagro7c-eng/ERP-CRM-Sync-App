@@ -1,0 +1,131 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-11-26 10:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "user",
+  "enabled",
+  "email",
+  "alternate_email",
+  "delivery_mode",
+  "scheduled_time",
+  "interval_minutes",
+  "deal_stage_change",
+  "deal_updates",
+  "leads",
+  "tasks",
+  "quotations",
+  "sales_orders",
+  "other_records",
+  "notify_own_actions"
+ ],
+ "fields": [
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "User",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Enabled"
+  },
+  {
+   "fieldname": "email",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Notification Email"
+  },
+  {
+   "fieldname": "alternate_email",
+   "fieldtype": "Data",
+   "label": "Alternate Email / CC"
+  },
+  {
+   "default": "Instant",
+   "fieldname": "delivery_mode",
+   "fieldtype": "Select",
+   "label": "Delivery Mode",
+   "options": "Instant\nDaily Scheduled\nPeriodic Interval"
+  },
+  {
+   "default": "09:00:00",
+   "fieldname": "scheduled_time",
+   "fieldtype": "Time",
+   "label": "Daily Scheduled Time"
+  },
+  {
+   "default": "60",
+   "fieldname": "interval_minutes",
+   "fieldtype": "Int",
+   "label": "Batch Interval (Minutes)"
+  },
+  {
+   "default": "1",
+   "fieldname": "deal_stage_change",
+   "fieldtype": "Check",
+   "label": "Deal Stage Changes"
+  },
+  {
+   "default": "1",
+   "fieldname": "deal_updates",
+   "fieldtype": "Check",
+   "label": "Deal Updates & Products"
+  },
+  {
+   "default": "1",
+   "fieldname": "leads",
+   "fieldtype": "Check",
+   "label": "Leads"
+  },
+  {
+   "default": "1",
+   "fieldname": "tasks",
+   "fieldtype": "Check",
+   "label": "Tasks"
+  },
+  {
+   "default": "1",
+   "fieldname": "quotations",
+   "fieldtype": "Check",
+   "label": "Quotations"
+  },
+  {
+   "default": "1",
+   "fieldname": "sales_orders",
+   "fieldtype": "Check",
+   "label": "Sales Orders"
+  },
+  {
+   "default": "1",
+   "fieldname": "other_records",
+   "fieldtype": "Check",
+   "label": "Other Records"
+  },
+  {
+   "default": "0",
+   "fieldname": "notify_own_actions",
+   "fieldtype": "Check",
+   "label": "Notify on Own Changes"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-11-26 10:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Custom CRM Sync",
+ "name": "CRM User Notification Setting",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
