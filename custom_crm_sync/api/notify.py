@@ -328,6 +328,9 @@ def get_user_notification_settings(user=None):
 
     for row in (getattr(settings, "user_settings", None) or []):
         if row.user and row.user.strip().lower() == target_user.strip().lower():
+            raw_sched = str(getattr(row, "scheduled_time", "09:00:00") or "09:00:00")
+            sched_parts = raw_sched.split(":") if ":" in raw_sched else ["09", "00"]
+            clean_sched = f"{sched_parts[0].zfill(2)}:{sched_parts[1].zfill(2)}" if len(sched_parts) >= 2 else "09:00"
             return {
                 "name": getattr(row, "name", None),
                 "user": row.user,
@@ -335,7 +338,7 @@ def get_user_notification_settings(user=None):
                 "email": getattr(row, "email", "") or target_user,
                 "alternate_email": getattr(row, "alternate_email", "") or "",
                 "delivery_mode": getattr(row, "delivery_mode", "Instant") or "Instant",
-                "scheduled_time": str(getattr(row, "scheduled_time", "09:00:00") or "09:00:00")[:5],
+                "scheduled_time": clean_sched,
                 "interval_minutes": int(getattr(row, "interval_minutes", 60) or 60),
                 "deal_stage_change": int(row.deal_stage_change) if getattr(row, "deal_stage_change", None) is not None else 1,
                 "deal_updates": int(row.deal_updates) if getattr(row, "deal_updates", None) is not None else 1,
