@@ -706,7 +706,8 @@ def handle_quotation_webhook():
                 from custom_crm_sync.api.notify import notify_entity
                 notify_entity(
                     doctype="Quotation",
-                    docname=ref_name,
+                    docname=qtn_name,
+                    title=ref_name,
                     action=status_text,
                     details={
                         "Grand Total": f"PKR {grand_total:,.2f}",
@@ -727,7 +728,8 @@ def handle_quotation_webhook():
             from custom_crm_sync.api.notify import notify_entity
             notify_entity(
                 doctype="Quotation",
-                docname=ref_name,
+                docname=qtn_name,
+                title=ref_name,
                 action=status_text,
                 details={
                     "Grand Total": f"PKR {grand_total:,.2f}",
@@ -861,7 +863,8 @@ def handle_sales_order_webhook():
                 from custom_crm_sync.api.notify import notify_entity
                 notify_entity(
                     doctype="Sales Order",
-                    docname=ref_name,
+                    docname=so_name,
+                    title=ref_name,
                     action=status_text,
                     details={
                         "Grand Total": f"PKR {grand_total:,.2f}",
@@ -882,7 +885,8 @@ def handle_sales_order_webhook():
             from custom_crm_sync.api.notify import notify_entity
             notify_entity(
                 doctype="Sales Order",
-                docname=ref_name,
+                docname=so_name,
+                title=ref_name,
                 action=status_text,
                 details={
                     "Grand Total": f"PKR {grand_total:,.2f}",

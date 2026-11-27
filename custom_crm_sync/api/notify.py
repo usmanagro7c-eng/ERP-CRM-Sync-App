@@ -1,5 +1,6 @@
 import json
 from datetime import timedelta
+from urllib.parse import quote
 import frappe
 from frappe import _
 from frappe.utils import escape_html, now_datetime, validate_email_address
@@ -787,18 +788,19 @@ def send_user_test_notification(user=None, email=None, alternate_email=None):
 
 def get_record_url(app_base_url, doctype, docname):
     base = (app_base_url or DEFAULT_APP_BASE_URL).rstrip("/")
+    encoded = quote(str(docname), safe="")
     if doctype == "CRM Deal":
-        return f"{base}/deals/{docname}"
+        return f"{base}/deals/{encoded}"
     elif doctype == "CRM Lead":
-        return f"{base}/leads/{docname}"
+        return f"{base}/leads/{encoded}"
     elif doctype == "Quotation":
-        return f"{base}/quotations/{docname}"
+        return f"{base}/quotations/{encoded}"
     elif doctype == "Sales Order":
-        return f"{base}/orders/{docname}"
+        return f"{base}/sales-orders?q={encoded}"
     elif doctype == "CRM Organization":
-        return f"{base}/organizations/{docname}"
+        return f"{base}/organizations/{encoded}"
     elif doctype == "Contact":
-        return f"{base}/contacts/{docname}"
+        return f"{base}/contacts/{encoded}"
     return base
 
 
@@ -1230,6 +1232,10 @@ def on_change(doc, method=None):
         ):
             return
 
+        if method == "on_update" and getattr(doc.flags, "in_insert", False):
+            # Frappe Document.insert() fires on_update right after after_insert; ignore it so we don't send duplicate alerts.
+            return
+
         settings = get_notification_settings_doc()
         if not settings or not settings.enabled:
             return
@@ -1377,7 +1383,7 @@ def on_change(doc, method=None):
         frappe.log_error(frappe.get_traceback(), f"Hierarchy notify on_change failed: {str(e)}")
 
 
-def notify_entity(doctype, docname, action, details=None, crm_deal=None, actor_user=None):
+def notify_entity(doctype, docname, action, details=None, crm_deal=None, actor_user=None, title=None):
     """
     Helper called for external events (e.g. ERPNext Quotation / Sales Order webhooks).
     """
@@ -1388,7 +1394,9 @@ def notify_entity(doctype, docname, action, details=None, crm_deal=None, actor_u
 
         effective_actor = actor_user
         if not effective_actor and crm_deal and frappe.db.exists("CRM Deal", crm_deal):
-            effective_actor = frappe.db.get_value("CRM Deal", crm_deal, "owner")
+            deal_meta = frappe.db.get_value("CRM Deal", crm_deal, ["deal_owner", "owner"], as_dict=True)
+            if deal_meta:
+                effective_actor = deal_meta.get("deal_owner") or deal_meta.get("owner")
 
         candidates = resolve_hierarchy_candidates(effective_actor, settings)
         if not candidates:
@@ -1400,10 +1408,11 @@ def notify_entity(doctype, docname, action, details=None, crm_deal=None, actor_u
             return
 
         app_base_url = DEFAULT_APP_BASE_URL
-        subject = f"[AgroCRM Alert] {doctype} \"{docname}\" was {action}"
+        display_title = title or docname
+        subject = f"[AgroCRM Alert] {doctype} \"{display_title}\" was {action}"
         content = format_entity_change_html(
             app_base_url, doctype, docname, action,
-            title=docname, details=details, modified_by=effective_actor or "ERPNext Webhook",
+            title=display_title, details=details, modified_by=effective_actor or "ERPNext Webhook",
         )
 
         dispatch_user_notifications(deliveries, subject, content, doctype, docname)
