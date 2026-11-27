@@ -7,6 +7,8 @@
  "engine": "InnoDB",
  "field_order": [
   "status",
+  "recipient_user",
+  "delivery_mode",
   "reference_doctype",
   "reference_name",
   "recipients",
@@ -22,6 +24,18 @@
    "in_standard_filter": 1,
    "label": "Status",
    "options": "Pending\nDispatched\nCancelled"
+  },
+  {
+   "fieldname": "recipient_user",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Recipient User"
+  },
+  {
+   "fieldname": "delivery_mode",
+   "fieldtype": "Data",
+   "label": "Delivery Mode"
   },
   {
    "fieldname": "reference_doctype",

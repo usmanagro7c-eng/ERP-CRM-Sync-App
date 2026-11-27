@@ -19,7 +19,8 @@
   "quotations",
   "sales_orders",
   "other_records",
-  "notify_own_actions"
+  "notify_own_actions",
+  "last_dispatched"
  ],
  "fields": [
   {
@@ -114,6 +115,12 @@
    "fieldname": "notify_own_actions",
    "fieldtype": "Check",
    "label": "Notify on Own Changes"
+  },
+  {
+   "fieldname": "last_dispatched",
+   "fieldtype": "Datetime",
+   "label": "Last Dispatched At",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 0,

@@ -1,9 +1,10 @@
 import json
-import traceback
 from datetime import timedelta
 import frappe
 from frappe import _
 from frappe.utils import escape_html, now_datetime, validate_email_address
+
+DEFAULT_APP_BASE_URL = "https://pipedrive-crm.usman-agro7c.workers.dev"
 
 
 def _get_time_parts(value):
@@ -29,42 +30,36 @@ def _get_target_time(now, time_value):
     return now.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
 
-def get_delivery_config(settings):
-    """
-    Safely extract delivery configuration.
-    Supports both direct DocType fields (post-migration) and delivery_schedule JSON string (pre-migration).
-    Returns (delivery_mode, scheduled_time, interval_minutes).
-    """
-    if not settings:
-        return "instant", "09:00", 60
-
-    sched_json = {}
-    raw_schedule = getattr(settings, "delivery_schedule", None)
-    if raw_schedule:
-        try:
-            sched_json = json.loads(raw_schedule)
-        except Exception:
-            sched_json = {}
-
-    raw_mode = getattr(settings, "delivery_mode", None) or sched_json.get("delivery_mode") or "Instant"
-    mode_str = str(raw_mode).strip().lower()
+def _normalize_delivery_mode(raw_mode):
+    mode_str = str(raw_mode or "Instant").strip().lower()
     if "sched" in mode_str:
-        delivery_mode = "scheduled"
-    elif "interv" in mode_str:
-        delivery_mode = "interval"
-    else:
-        delivery_mode = "instant"
+        return "scheduled"
+    if "interv" in mode_str:
+        return "interval"
+    return "instant"
 
-    raw_time = getattr(settings, "scheduled_time", None) or sched_json.get("scheduled_time") or "09:00"
-    scheduled_time = str(raw_time)[:5]
 
-    try:
-        raw_interval = getattr(settings, "interval_minutes", None) or sched_json.get("interval_minutes") or 60
-        interval_minutes = int(raw_interval)
-    except Exception:
-        interval_minutes = 60
+def _normalize_scheduled_time(raw_time):
+    raw_str = str(raw_time or "09:00").strip()
+    if ":" in raw_str:
+        parts = raw_str.split(":")
+        return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}" if len(parts) >= 2 else "09:00"
+    return "09:00"
 
-    return delivery_mode, scheduled_time, interval_minutes
+
+def _extract_valid_emails(*sources):
+    """Collect deduplicated valid email strings from raw email or comma/newline lists."""
+    emails = []
+    seen = set()
+    for src in sources:
+        if not src:
+            continue
+        for token in str(src).replace("\n", ",").split(","):
+            cleaned = token.strip().lower()
+            if cleaned and "@" in cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                emails.append(cleaned)
+    return emails
 
 
 def get_notification_settings_doc():
@@ -77,7 +72,7 @@ def get_notification_settings_doc():
 @frappe.whitelist()
 def get_notification_settings():
     """
-    Fetch current notification configuration and hierarchy tree nodes.
+    Fetch current hierarchy notification configuration and hierarchy tree nodes.
     Requires an authenticated user session.
     """
     if frappe.session.user == "Guest":
@@ -89,28 +84,6 @@ def get_notification_settings():
 
     selected_nodes = [d.node for d in (settings.selected_nodes or []) if d.node]
 
-    delivery_mode, scheduled_time, interval_minutes = get_delivery_config(settings)
-    settings_dict = {
-        "enabled": bool(settings.enabled),
-        "mode": settings.mode or "All Ancestors",
-        "selected_nodes": selected_nodes,
-        "include_actor": bool(settings.include_actor),
-        "extra_emails": settings.extra_emails or "",
-        "app_base_url": settings.app_base_url or "https://pipedrive-crm.usman-agro7c.workers.dev",
-        "deal_stage_change": bool(settings.deal_stage_change),
-        "deal_updates": bool(settings.deal_updates),
-        "leads": bool(settings.leads),
-        "tasks": bool(settings.tasks),
-        "quotations": bool(settings.quotations),
-        "sales_orders": bool(settings.sales_orders),
-        "other_records": bool(settings.other_records),
-        "delivery_mode": delivery_mode,
-        "scheduled_time": scheduled_time,
-        "interval_minutes": interval_minutes,
-        "delivery_schedule": getattr(settings, "delivery_schedule", None) or "",
-        "last_dispatched": str(getattr(settings, "last_dispatched", None) or ""),
-    }
-
     user_settings = []
     for u in (getattr(settings, "user_settings", None) or []):
         user_settings.append({
@@ -119,8 +92,8 @@ def get_notification_settings():
             "enabled": int(u.enabled) if getattr(u, "enabled", None) is not None else 1,
             "email": getattr(u, "email", "") or "",
             "alternate_email": getattr(u, "alternate_email", "") or "",
-            "delivery_mode": getattr(u, "delivery_mode", "Instant") or "Instant",
-            "scheduled_time": str(getattr(u, "scheduled_time", "09:00:00") or "09:00:00")[:5],
+            "delivery_mode": _normalize_delivery_mode(getattr(u, "delivery_mode", "Instant")),
+            "scheduled_time": _normalize_scheduled_time(getattr(u, "scheduled_time", "09:00:00")),
             "interval_minutes": int(getattr(u, "interval_minutes", 60) or 60),
             "deal_stage_change": int(u.deal_stage_change) if getattr(u, "deal_stage_change", None) is not None else 1,
             "deal_updates": int(u.deal_updates) if getattr(u, "deal_updates", None) is not None else 1,
@@ -130,8 +103,15 @@ def get_notification_settings():
             "sales_orders": int(u.sales_orders) if getattr(u, "sales_orders", None) is not None else 1,
             "other_records": int(u.other_records) if getattr(u, "other_records", None) is not None else 1,
             "notify_own_actions": int(u.notify_own_actions) if getattr(u, "notify_own_actions", None) is not None else 0,
+            "last_dispatched": str(getattr(u, "last_dispatched", None) or ""),
         })
-    settings_dict["user_settings"] = user_settings
+
+    settings_dict = {
+        "enabled": bool(settings.enabled),
+        "mode": settings.mode or "All Ancestors",
+        "selected_nodes": selected_nodes,
+        "user_settings": user_settings,
+    }
 
     # Fetch hierarchy tree nodes from "CRM Sales Hierarchy"
     tree_nodes = []
@@ -144,7 +124,7 @@ def get_notification_settings():
         records = frappe.get_all(
             "CRM Sales Hierarchy",
             fields=fields,
-            order_by="lft asc"
+            order_by="lft asc",
         )
 
         # Batch resolve active user emails
@@ -154,7 +134,7 @@ def get_notification_settings():
             active_users = frappe.get_all(
                 "User",
                 filters={"name": ["in", user_ids], "enabled": 1},
-                fields=["name", "email"]
+                fields=["name", "email"],
             )
             user_email_map = {u.name: u.email for u in active_users}
 
@@ -183,7 +163,7 @@ def get_notification_settings():
 @frappe.whitelist()
 def save_notification_settings(payload=None):
     """
-    Save notification configuration.
+    Save hierarchy routing configuration (enabled, mode, selected_nodes).
     Restricted to System Manager and Sales Manager roles.
     """
     if frappe.session.user == "Guest":
@@ -215,29 +195,7 @@ def save_notification_settings(payload=None):
 
     if "enabled" in payload:
         settings.enabled = 1 if payload.get("enabled") else 0
-    if "include_actor" in payload:
-        settings.include_actor = 1 if payload.get("include_actor") else 0
-    if "app_base_url" in payload:
-        settings.app_base_url = (payload.get("app_base_url") or "").rstrip("/")
 
-    # Extra emails validation
-    if "extra_emails" in payload:
-        raw_extras = payload.get("extra_emails") or ""
-        valid_extras = []
-        if raw_extras:
-            for em in raw_extras.replace("\n", ",").split(","):
-                em_clean = em.strip()
-                if em_clean:
-                    validate_email_address(em_clean, throw=True)
-                    valid_extras.append(em_clean)
-        settings.extra_emails = ", ".join(valid_extras)
-
-    # Event toggles
-    for evt in ["deal_stage_change", "deal_updates", "leads", "tasks", "quotations", "sales_orders", "other_records"]:
-        if evt in payload:
-            setattr(settings, evt, 1 if payload.get(evt) else 0)
-
-    # Selected nodes
     if "selected_nodes" in payload:
         nodes = payload.get("selected_nodes") or []
         if isinstance(nodes, str):
@@ -249,7 +207,6 @@ def save_notification_settings(payload=None):
         if not isinstance(nodes, list):
             frappe.throw(_("selected_nodes must be a list of hierarchy node identifiers."))
 
-        # Verify nodes exist in CRM Sales Hierarchy
         if nodes:
             existing = set(frappe.get_all("CRM Sales Hierarchy", filters={"name": ["in", nodes]}, pluck="name"))
             invalid = [n for n in nodes if n not in existing]
@@ -259,28 +216,6 @@ def save_notification_settings(payload=None):
         settings.set("selected_nodes", [])
         for n in nodes:
             settings.append("selected_nodes", {"node": n})
-
-    # Email Delivery Timing & Schedule
-    if "delivery_mode" in payload:
-        mode_val = str(payload.get("delivery_mode") or "Instant").strip().lower()
-        if "sched" in mode_val:
-            settings.delivery_mode = "Daily Scheduled"
-        elif "interv" in mode_val:
-            settings.delivery_mode = "Periodic Interval"
-        else:
-            settings.delivery_mode = "Instant"
-
-    if "scheduled_time" in payload:
-        settings.scheduled_time = payload.get("scheduled_time") or "09:00:00"
-
-    if "interval_minutes" in payload:
-        try:
-            settings.interval_minutes = int(payload.get("interval_minutes") or 60)
-        except (ValueError, TypeError):
-            settings.interval_minutes = 60
-
-    if "delivery_schedule" in payload:
-        settings.delivery_schedule = payload.get("delivery_schedule")
 
     settings.save(ignore_permissions=True)
     frappe.db.commit()
@@ -308,6 +243,23 @@ def _get_default_user_settings_dict(user):
     }
 
 
+def _find_user_setting_row(settings, target_user):
+    if not settings or not target_user:
+        return None
+    target_lower = target_user.strip().lower()
+    target_email = (frappe.db.get_value("User", target_user, "email") or "").strip().lower()
+    for row in (getattr(settings, "user_settings", None) or []):
+        row_user = (getattr(row, "user", None) or "").strip().lower()
+        row_email = (getattr(row, "email", None) or "").strip().lower()
+        if row_user and row_user == target_lower:
+            return row
+        if target_email and row_user == target_email:
+            return row
+        if not row_user and row_email and row_email in (target_lower, target_email):
+            return row
+    return None
+
+
 @frappe.whitelist()
 def get_user_notification_settings(user=None):
     """
@@ -326,31 +278,26 @@ def get_user_notification_settings(user=None):
     if not settings:
         return _get_default_user_settings_dict(target_user)
 
-    for row in (getattr(settings, "user_settings", None) or []):
-        if row.user and row.user.strip().lower() == target_user.strip().lower():
-            raw_sched = str(getattr(row, "scheduled_time", "09:00:00") or "09:00:00")
-            sched_parts = raw_sched.split(":") if ":" in raw_sched else ["09", "00"]
-            clean_sched = f"{sched_parts[0].zfill(2)}:{sched_parts[1].zfill(2)}" if len(sched_parts) >= 2 else "09:00"
-            dm_raw = str(getattr(row, "delivery_mode", "Instant") or "Instant").strip().lower()
-            clean_dm = "scheduled" if "sched" in dm_raw else ("interval" if "interv" in dm_raw else "instant")
-            return {
-                "name": getattr(row, "name", None),
-                "user": row.user,
-                "enabled": int(row.enabled) if getattr(row, "enabled", None) is not None else 1,
-                "email": getattr(row, "email", "") or target_user,
-                "alternate_email": getattr(row, "alternate_email", "") or "",
-                "delivery_mode": clean_dm,
-                "scheduled_time": clean_sched,
-                "interval_minutes": int(getattr(row, "interval_minutes", 60) or 60),
-                "deal_stage_change": int(row.deal_stage_change) if getattr(row, "deal_stage_change", None) is not None else 1,
-                "deal_updates": int(row.deal_updates) if getattr(row, "deal_updates", None) is not None else 1,
-                "leads": int(row.leads) if getattr(row, "leads", None) is not None else 1,
-                "tasks": int(row.tasks) if getattr(row, "tasks", None) is not None else 1,
-                "quotations": int(row.quotations) if getattr(row, "quotations", None) is not None else 1,
-                "sales_orders": int(row.sales_orders) if getattr(row, "sales_orders", None) is not None else 1,
-                "other_records": int(row.other_records) if getattr(row, "other_records", None) is not None else 1,
-                "notify_own_actions": int(row.notify_own_actions) if getattr(row, "notify_own_actions", None) is not None else 0,
-            }
+    row = _find_user_setting_row(settings, target_user)
+    if row:
+        return {
+            "name": getattr(row, "name", None),
+            "user": row.user,
+            "enabled": int(row.enabled) if getattr(row, "enabled", None) is not None else 1,
+            "email": getattr(row, "email", "") or target_user,
+            "alternate_email": getattr(row, "alternate_email", "") or "",
+            "delivery_mode": _normalize_delivery_mode(getattr(row, "delivery_mode", "Instant")),
+            "scheduled_time": _normalize_scheduled_time(getattr(row, "scheduled_time", "09:00:00")),
+            "interval_minutes": int(getattr(row, "interval_minutes", 60) or 60),
+            "deal_stage_change": int(row.deal_stage_change) if getattr(row, "deal_stage_change", None) is not None else 1,
+            "deal_updates": int(row.deal_updates) if getattr(row, "deal_updates", None) is not None else 1,
+            "leads": int(row.leads) if getattr(row, "leads", None) is not None else 1,
+            "tasks": int(row.tasks) if getattr(row, "tasks", None) is not None else 1,
+            "quotations": int(row.quotations) if getattr(row, "quotations", None) is not None else 1,
+            "sales_orders": int(row.sales_orders) if getattr(row, "sales_orders", None) is not None else 1,
+            "other_records": int(row.other_records) if getattr(row, "other_records", None) is not None else 1,
+            "notify_own_actions": int(row.notify_own_actions) if getattr(row, "notify_own_actions", None) is not None else 0,
+        }
 
     return _get_default_user_settings_dict(target_user)
 
@@ -383,25 +330,34 @@ def save_user_notification_settings(payload=None):
     if not settings:
         frappe.throw(_("CRM Notification Settings DocType is not available on this site."))
 
-    matched_row = None
-    for row in (getattr(settings, "user_settings", None) or []):
-        if row.user and row.user.strip().lower() == target_user.strip().lower():
-            matched_row = row
-            break
-
+    matched_row = _find_user_setting_row(settings, target_user)
     if not matched_row:
         matched_row = settings.append("user_settings", {"user": target_user})
 
     if "enabled" in payload:
         matched_row.enabled = 1 if payload.get("enabled") else 0
     if "email" in payload:
-        matched_row.email = (payload.get("email") or target_user).strip()
+        primary_email = (payload.get("email") or target_user).strip()
+        if primary_email:
+            validate_email_address(primary_email, throw=True)
+        matched_row.email = primary_email
     if "alternate_email" in payload:
-        matched_row.alternate_email = (payload.get("alternate_email") or "").strip()
+        raw_alt = (payload.get("alternate_email") or "").strip()
+        valid_alts = []
+        if raw_alt:
+            for em in raw_alt.replace("\n", ",").split(","):
+                cleaned = em.strip()
+                if cleaned:
+                    validate_email_address(cleaned, throw=True)
+                    valid_alts.append(cleaned)
+        matched_row.alternate_email = ", ".join(valid_alts)
 
     if "delivery_mode" in payload:
-        dm = str(payload.get("delivery_mode") or "Instant").strip().lower()
-        matched_row.delivery_mode = "Daily Scheduled" if "sched" in dm else ("Periodic Interval" if "interv" in dm else "Instant")
+        dm = _normalize_delivery_mode(payload.get("delivery_mode"))
+        matched_row.delivery_mode = (
+            "Daily Scheduled" if dm == "scheduled"
+            else ("Periodic Interval" if dm == "interval" else "Instant")
+        )
     if "scheduled_time" in payload:
         matched_row.scheduled_time = payload.get("scheduled_time") or "09:00:00"
     if "interval_minutes" in payload:
@@ -419,92 +375,13 @@ def save_user_notification_settings(payload=None):
     return {"success": True}
 
 
-def filter_recipients_by_user_preferences(recipients, event_type, actor_user, settings):
+def resolve_hierarchy_candidates(actor_user, settings):
     """
-    Filter resolved recipient email addresses against each user's personal preferences
-    stored in the `user_settings` child table of CRM Notification Settings.
-    - If user disabled notifications entirely (enabled=0), excludes them.
-    - If user disabled this specific event_type (e.g. quotations=0), excludes them.
-    - If recipient is the actor and has notify_own_actions=0, excludes them.
-    - Appends any alternate_email configured by the user.
-    """
-    if not recipients or not settings:
-        return recipients
-
-    user_settings_list = getattr(settings, "user_settings", None) or []
-    if not user_settings_list:
-        return recipients
-
-    # Build mapping by user email and user id
-    pref_by_user = {}
-    for row in user_settings_list:
-        if getattr(row, "user", None):
-            pref_by_user[row.user.strip().lower()] = row
-        if getattr(row, "email", None):
-            pref_by_user[row.email.strip().lower()] = row
-
-    # Also map recipient emails to User document names if different
-    email_to_user = {}
-    missing_emails = [em for em in recipients if em.lower() not in pref_by_user]
-    if missing_emails:
-        try:
-            user_matches = frappe.get_all("User", filters={"email": ["in", missing_emails]}, fields=["name", "email"])
-            for u in user_matches:
-                if u.email:
-                    email_to_user[u.email.strip().lower()] = u.name.strip().lower()
-        except Exception:
-            pass
-
-    filtered = set()
-    actor_lower = (actor_user or "").strip().lower()
-
-    for em in recipients:
-        em_lower = em.strip().lower()
-        user_id = email_to_user.get(em_lower, em_lower)
-        user_pref = pref_by_user.get(em_lower) or pref_by_user.get(user_id)
-
-        if user_pref:
-            # Check 1: User master enabled switch
-            if not getattr(user_pref, "enabled", 1):
-                continue
-
-            # Check 2: Event-specific toggle
-            if event_type and hasattr(user_pref, event_type):
-                if not getattr(user_pref, event_type, 1):
-                    continue
-
-            # Check 3: Self-action check
-            is_actor = (em_lower == actor_lower or user_id == actor_lower)
-            if is_actor and not getattr(user_pref, "notify_own_actions", 0):
-                continue
-
-            # Check 4: Preferred email vs login email
-            target_email = getattr(user_pref, "email", None) or em
-            filtered.add(target_email.strip().lower())
-
-            # Check 5: Alternate email / CC
-            alt = getattr(user_pref, "alternate_email", None)
-            if alt and "@" in alt:
-                for a in alt.replace("\n", ",").split(","):
-                    a_clean = a.strip().lower()
-                    if a_clean and "@" in a_clean:
-                        filtered.add(a_clean)
-        else:
-            # User has no custom row yet -> use global settings defaults
-            filtered.add(em_lower)
-
-    return sorted(list(filtered))
-
-
-def resolve_recipients(actor_user, settings):
-    """
-    Resolve target email recipients based on the actor and hierarchy settings.
-    - 'Direct Parent': Immediate parent node in CRM Sales Hierarchy.
-    - 'All Ancestors': Full management ancestor chain up to root.
-    - 'Selected Nodes': Admin-ticked nodes (actor independent).
-    - Appends extra_emails.
-    - Excludes actor unless include_actor is enabled.
-    - De-duplicates case-insensitively.
+    Resolve candidate recipients from CRM Sales Hierarchy based strictly on `settings.mode`.
+    Returns a list of dicts:
+        [{"user": str, "fallback_email": str, "is_actor": bool}, ...]
+    Also includes `actor_user` as a candidate with `is_actor=True` so their personal
+    `notify_own_actions` preference can decide self-delivery independently.
     """
     if not settings or not settings.enabled:
         return []
@@ -517,22 +394,16 @@ def resolve_recipients(actor_user, settings):
             if row.node:
                 target_node_ids.add(row.node)
     else:
-        # Need to find actor's node in CRM Sales Hierarchy
         actor_node = None
         if actor_user:
             actor_node = frappe.db.get_value(
                 "CRM Sales Hierarchy",
                 {"user": actor_user},
                 ["name", "reports_to"],
-                as_dict=True
+                as_dict=True,
             )
 
-        if not actor_node:
-            frappe.log_error(
-                f"Actor user '{actor_user}' is not mapped to any node in CRM Sales Hierarchy.",
-                "Hierarchy Notification - Actor Not Found"
-            )
-        else:
+        if actor_node:
             if mode == "Direct Parent":
                 if actor_node.reports_to:
                     target_node_ids.add(actor_node.reports_to)
@@ -544,12 +415,16 @@ def resolve_recipients(actor_user, settings):
                 except Exception as e:
                     frappe.log_error(
                         f"Failed to get ancestors for hierarchy node {actor_node.name}: {str(e)}",
-                        "Hierarchy Notification - Ancestor Lookup Failed"
+                        "Hierarchy Notification - Ancestor Lookup Failed",
                     )
 
-    resolved_emails = set()
+    candidates = {}
+    actor_lower = (actor_user or "").strip().lower()
+    actor_email = ""
+    if actor_user:
+        actor_email = (frappe.db.get_value("User", actor_user, "email") or "").strip().lower()
 
-    if target_node_ids:
+    if target_node_ids and frappe.db.exists("DocType", "CRM Sales Hierarchy"):
         has_notification_email = frappe.get_meta("CRM Sales Hierarchy").has_field("notification_email")
         fields = ["name", "user"]
         if has_notification_email:
@@ -563,46 +438,157 @@ def resolve_recipients(actor_user, settings):
             active_users = frappe.get_all(
                 "User",
                 filters={"name": ["in", user_ids], "enabled": 1},
-                fields=["name", "email"]
+                fields=["name", "email"],
             )
             user_email_map = {u.name: u.email.strip().lower() for u in active_users if u.email}
 
         for n in nodes:
+            fallback_email = ""
             if has_notification_email and n.get("notification_email"):
-                resolved_emails.add(n.get("notification_email").strip().lower())
+                fallback_email = n.get("notification_email").strip().lower()
             elif n.user and n.user in user_email_map:
-                resolved_emails.add(user_email_map[n.user])
+                fallback_email = user_email_map[n.user]
 
-    # Extra emails
-    if settings.extra_emails:
-        for em in settings.extra_emails.replace("\n", ",").split(","):
-            cleaned = em.strip().lower()
-            if cleaned and "@" in cleaned:
-                resolved_emails.add(cleaned)
+            user_id = (n.user or fallback_email or "").strip()
+            if not user_id:
+                continue
 
-    # Actor inclusion / exclusion
-    actor_email = None
-    if actor_user:
-        actor_email = frappe.db.get_value("User", actor_user, "email")
+            key = user_id.lower()
+            is_actor = bool(actor_lower and (key == actor_lower or (fallback_email and fallback_email in (actor_lower, actor_email))))
+            candidates[key] = {
+                "user": user_id,
+                "fallback_email": fallback_email,
+                "is_actor": is_actor,
+            }
 
-    if settings.include_actor and actor_email:
-        # Explicitly add actor's own email to recipients
-        resolved_emails.add(actor_email.strip().lower())
-    elif not settings.include_actor and actor_user:
-        # Remove actor from recipient list
-        actor_emails_to_remove = {actor_user.strip().lower()}
-        if actor_email:
-            actor_emails_to_remove.add(actor_email.strip().lower())
-        resolved_emails = {em for em in resolved_emails if em not in actor_emails_to_remove}
+    # Always include actor as candidate (tagged is_actor=True) so their own `notify_own_actions`
+    # setting is honored regardless of hierarchy topology.
+    if actor_user and actor_lower not in ("guest",):
+        actor_fallback = actor_email or (actor_user if "@" in actor_user else "")
+        if actor_lower not in candidates:
+            candidates[actor_lower] = {
+                "user": actor_user,
+                "fallback_email": actor_fallback,
+                "is_actor": True,
+            }
+        else:
+            candidates[actor_lower]["is_actor"] = True
 
-    return sorted(list(resolved_emails))
+    return list(candidates.values())
+
+
+def resolve_recipients(actor_user, settings):
+    """
+    Resolve pure hierarchy email recipients (excluding actor) for preview & admin diagnostic test.
+    """
+    if not settings or not settings.enabled:
+        return []
+
+    candidates = resolve_hierarchy_candidates(actor_user, settings)
+    emails = []
+    seen = set()
+    for c in candidates:
+        if c["is_actor"]:
+            continue
+        em = c.get("fallback_email")
+        if em and "@" in em and em not in seen:
+            seen.add(em)
+            emails.append(em)
+    return sorted(emails)
+
+
+def evaluate_user_deliveries(candidates, event_type, settings):
+    """
+    Evaluate every candidate user against their personal `CRM User Notification Setting` row
+    in `settings.user_settings`.
+    Returns list of delivery instructions:
+        [{"user": str, "emails": [str, ...], "delivery_mode": "instant"|"scheduled"|"interval"}, ...]
+    """
+    if not candidates or not settings:
+        return []
+
+    user_settings_list = getattr(settings, "user_settings", None) or []
+    pref_by_key = {}
+    for row in user_settings_list:
+        row_user = (getattr(row, "user", None) or "").strip().lower()
+        row_email = (getattr(row, "email", None) or "").strip().lower()
+        if row_user:
+            pref_by_key[row_user] = row
+        if row_email and row_email not in pref_by_key:
+            pref_by_key[row_email] = row
+
+    deliveries = []
+    for cand in candidates:
+        user_id = cand["user"]
+        user_lower = user_id.strip().lower()
+        fallback_email = (cand.get("fallback_email") or "").strip().lower()
+        is_actor = bool(cand.get("is_actor"))
+
+        user_pref = pref_by_key.get(user_lower) or (pref_by_key.get(fallback_email) if fallback_email else None)
+
+        if is_actor:
+            # Self-notifications are opt-in per user (`notify_own_actions == 1`).
+            if not user_pref or not getattr(user_pref, "notify_own_actions", 0):
+                continue
+
+        if user_pref:
+            if not getattr(user_pref, "enabled", 1):
+                continue
+
+            if event_type and hasattr(user_pref, event_type):
+                if not getattr(user_pref, event_type, 1):
+                    continue
+
+            primary = (getattr(user_pref, "email", None) or fallback_email).strip().lower()
+            alternate = getattr(user_pref, "alternate_email", None)
+            emails = _extract_valid_emails(primary, alternate)
+            delivery_mode = _normalize_delivery_mode(getattr(user_pref, "delivery_mode", "Instant"))
+        else:
+            # Unconfigured hierarchy member defaults: enabled=1, all events=1, instant mode.
+            emails = _extract_valid_emails(fallback_email)
+            delivery_mode = "instant"
+
+        if not emails:
+            continue
+
+        deliveries.append({
+            "user": getattr(user_pref, "user", None) or user_id,
+            "emails": emails,
+            "delivery_mode": delivery_mode,
+        })
+
+    return deliveries
+
+
+def filter_recipients_by_user_preferences(recipients, event_type, actor_user, settings):
+    """
+    Backward-compatible helper filtering a flat list of emails against user preferences.
+    """
+    if not recipients or not settings:
+        return recipients
+
+    actor_lower = (actor_user or "").strip().lower()
+    candidates = []
+    for em in recipients:
+        em_lower = em.strip().lower()
+        candidates.append({
+            "user": em_lower,
+            "fallback_email": em_lower,
+            "is_actor": bool(actor_lower and em_lower == actor_lower),
+        })
+
+    deliveries = evaluate_user_deliveries(candidates, event_type, settings)
+    filtered = set()
+    for d in deliveries:
+        for em in d["emails"]:
+            filtered.add(em)
+    return sorted(filtered)
 
 
 @frappe.whitelist()
 def preview_recipients(mode, selected_nodes=None, user=None):
     """
-    Simulate recipient resolution for UI preview panels.
-    Allows passing a custom mode, selected_nodes list, and actor user.
+    Simulate hierarchy recipient resolution for the System Hierarchy UI preview panel.
     """
     if frappe.session.user == "Guest":
         frappe.throw(_("Authentication required to preview recipients."), frappe.PermissionError)
@@ -611,15 +597,12 @@ def preview_recipients(mode, selected_nodes=None, user=None):
     if not settings:
         return {"recipients": [], "count": 0}
 
-    # Create an in-memory clone of settings with preview overrides
     class MockSettings:
         pass
 
     mock_settings = MockSettings()
     mock_settings.enabled = True
     mock_settings.mode = mode or settings.mode or "All Ancestors"
-    mock_settings.include_actor = settings.include_actor
-    mock_settings.extra_emails = settings.extra_emails
 
     if selected_nodes is not None:
         if isinstance(selected_nodes, str):
@@ -644,7 +627,7 @@ def preview_recipients(mode, selected_nodes=None, user=None):
 @frappe.whitelist()
 def send_test_notification():
     """
-    Send an immediate test notification to resolved recipients for the current user.
+    Send an immediate test notification to resolved hierarchy recipients for the current admin user.
     """
     if frappe.session.user == "Guest":
         frappe.throw(_("Authentication required."), frappe.PermissionError)
@@ -655,7 +638,7 @@ def send_test_notification():
 
     recipients = resolve_recipients(frappe.session.user, settings)
     if not recipients:
-        frappe.throw(_("No recipients resolved for current user under mode '{0}'.").format(settings.mode))
+        frappe.throw(_("No hierarchy recipients resolved for current user under mode '{0}'.").format(settings.mode))
 
     now = now_datetime().strftime("%d %b %Y, %I:%M %p")
     subject = "[System Verification] AgroCRM Hierarchy Notification Test"
@@ -682,7 +665,7 @@ def send_test_notification():
           <td style="padding: 28px 32px;">
             <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.6; color: #1e293b; font-weight: 600;">Dear Commercial Stakeholder,</p>
             <p style="margin: 0 0 20px; font-size: 13.5px; line-height: 1.65; color: #334155;">
-              This test transmission validates live SMTP connectivity, organizational hierarchy routing, and delivery queue processing across the AgroCRM enterprise environment.
+              This test transmission validates live SMTP connectivity and organizational hierarchy routing across the AgroCRM environment.
             </p>
             <div style="margin-bottom: 24px;">
               <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #64748b; margin-bottom: 8px;">Diagnostic Parameters</div>
@@ -706,22 +689,8 @@ def send_test_notification():
               </table>
             </div>
             <div style="background-color: #ecfdf5; border-left: 4px solid #059669; padding: 12px 16px; border-radius: 0 6px 6px 0; margin-bottom: 24px; font-size: 12.5px; color: #065f46; line-height: 1.55;">
-              <strong>System Status:</strong> All hierarchy notification listeners and mail workers are functioning optimally.
+              <strong>System Status:</strong> Hierarchy notification routing is functioning properly.
             </div>
-            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid #e2e8f0;">
-              <tr>
-                <td>
-                  <div style="font-size: 13px; color: #475569; margin-bottom: 3px;">Sincerely,</div>
-                  <div style="font-size: 13.5px; font-weight: 700; color: #0f172a;">AgroCRM Systems & Governance Administration</div>
-                  <div style="font-size: 12px; color: #64748b;">Enterprise Infrastructure Operations</div>
-                </td>
-              </tr>
-            </table>
-          </td>
-        </tr>
-        <tr>
-          <td style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 32px; font-size: 11px; color: #94a3b8; line-height: 1.55;">
-            <strong style="color: #64748b;">Confidentiality & Compliance Notice:</strong> This test notification was dispatched by an authenticated system administrator for diagnostic validation.
           </td>
         </tr>
       </table>
@@ -732,18 +701,92 @@ def send_test_notification():
         recipients=recipients,
         subject=subject,
         message=content,
-        now=True
+        now=True,
+    )
+
+    return {"success": True, "recipients": recipients, "count": len(recipients)}
+
+
+@frappe.whitelist()
+def send_user_test_notification(user=None, email=None, alternate_email=None):
+    """
+    Send a personal test email directly to the requesting user's configured email & CC.
+    Regular users can only dispatch to their own session user profile.
+    """
+    if frappe.session.user == "Guest":
+        frappe.throw(_("Authentication required."), frappe.PermissionError)
+
+    target_user = user or frappe.session.user
+    user_roles = frappe.get_roles(frappe.session.user)
+    if target_user != frappe.session.user and "System Manager" not in user_roles and "Sales Manager" not in user_roles:
+        target_user = frappe.session.user
+
+    settings = get_notification_settings_doc()
+    row = _find_user_setting_row(settings, target_user)
+    default_email = frappe.db.get_value("User", target_user, "email") or target_user
+
+    primary_email = (email or (getattr(row, "email", None) if row else None) or default_email).strip()
+    alt_email = alternate_email if alternate_email is not None else (getattr(row, "alternate_email", "") if row else "")
+
+    recipients = _extract_valid_emails(primary_email, alt_email)
+    if not recipients:
+        frappe.throw(_("No valid notification email configured for user '{0}'.").format(target_user))
+
+    for addr in recipients:
+        validate_email_address(addr, throw=True)
+
+    now = now_datetime().strftime("%d %b %Y, %I:%M %p")
+    delivery_mode = _normalize_delivery_mode(getattr(row, "delivery_mode", "Instant") if row else "Instant")
+    subject = "[Personal Verification] AgroCRM Email Preferences Test"
+    content = f"""
+    <div style="background-color: #f8fafc; padding: 24px 12px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; min-height: 100%;">
+      <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e2e8f0;">
+        <tr>
+          <td style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 24px 28px; border-bottom: 3px solid #059669;">
+            <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #34d399; margin-bottom: 4px;">AgroCRM · Personal Preferences</div>
+            <h1 style="margin: 0; font-size: 18px; font-weight: 700; color: #ffffff;">Personal Email Delivery Verified</h1>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 24px 28px; font-size: 13.5px; color: #334155; line-height: 1.6;">
+            <p style="margin: 0 0 16px;">Hello <strong>{escape_html(target_user)}</strong>,</p>
+            <p style="margin: 0 0 18px;">Your personal AgroCRM notification preferences are active and ready to receive alerts.</p>
+            <table style="width: 100%; border-collapse: collapse; font-size: 12.5px; border: 1px solid #e2e8f0; margin-bottom: 18px;">
+              <tr style="background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+                <td style="padding: 8px 12px; color: #64748b; font-weight: 600; width: 140px;">Delivery Mode:</td>
+                <td style="padding: 8px 12px; color: #0f172a; font-weight: 600;">{escape_html(delivery_mode.title())}</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #e2e8f0;">
+                <td style="padding: 8px 12px; color: #64748b; font-weight: 600;">Recipients:</td>
+                <td style="padding: 8px 12px; color: #0f172a; font-family: monospace;">{escape_html(', '.join(recipients))}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 12px; color: #64748b; font-weight: 600;">Sent At:</td>
+                <td style="padding: 8px 12px; color: #0f172a;">{now}</td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </div>
+    """.strip()
+
+    frappe.sendmail(
+        recipients=recipients,
+        subject=subject,
+        message=content,
+        now=True,
     )
 
     return {"success": True, "recipients": recipients}
 
 
 # ─────────────────────────────────────────────
-# HTML EMAIL TEMPLATES (Ported from AgroCRM)
+# HTML EMAIL TEMPLATES
 # ─────────────────────────────────────────────
 
 def get_record_url(app_base_url, doctype, docname):
-    base = app_base_url.rstrip("/")
+    base = (app_base_url or DEFAULT_APP_BASE_URL).rstrip("/")
     if doctype == "CRM Deal":
         return f"{base}/deals/{docname}"
     elif doctype == "CRM Lead":
@@ -800,7 +843,6 @@ def format_stage_change_html(app_base_url, deal_id, deal_title, from_stage, to_s
     return f"""
     <div style="background-color: #f8fafc; padding: 24px 12px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; min-height: 100%;">
       <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 640px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
-        <!-- Corporate Navy Gradient Header -->
         <tr>
           <td style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 28px 32px; border-bottom: 3px solid #0284c7;">
             <table border="0" cellpadding="0" cellspacing="0" width="100%">
@@ -817,16 +859,12 @@ def format_stage_change_html(app_base_url, deal_id, deal_title, from_stage, to_s
             </table>
           </td>
         </tr>
-
-        <!-- Body Content -->
         <tr>
           <td style="padding: 28px 32px;">
             <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.6; color: #1e293b; font-weight: 600;">Dear Commercial Stakeholder,</p>
             <p style="margin: 0 0 20px; font-size: 13.5px; line-height: 1.65; color: #334155;">
               This official communication advises that the commercial deal referenced below has reached a new pipeline milestone within the sales management hierarchy. Details of the stage transition and commercial values are outlined below.
             </p>
-
-            <!-- Stage Progression Visual Pill -->
             <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 24px; text-align: center;">
               <div style="display: inline-flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px;">
                 {from_stage_html}
@@ -835,8 +873,6 @@ def format_stage_change_html(app_base_url, deal_id, deal_title, from_stage, to_s
                 </span>
               </div>
             </div>
-
-            <!-- Deal Attributes Table -->
             <div style="margin-bottom: 24px;">
               <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #64748b; margin-bottom: 8px;">Commercial Deal Attributes</div>
               <table style="width: 100%; border-collapse: collapse; font-size: 13px; border: 1px solid #f1f5f9; border-radius: 6px; overflow: hidden;">
@@ -856,20 +892,14 @@ def format_stage_change_html(app_base_url, deal_id, deal_title, from_stage, to_s
                 </tr>
               </table>
             </div>
-
-            <!-- Operational Guidance Callout -->
             <div style="background-color: #eff6ff; border-left: 4px solid #0284c7; padding: 12px 16px; border-radius: 0 6px 6px 0; margin-bottom: 24px; font-size: 12.5px; color: #1e40af; line-height: 1.55;">
               <strong>Operational Guidance:</strong> {guidance_text}
             </div>
-
-            <!-- Action Button -->
             <div style="text-align: center; margin: 28px 0 20px;">
               <a href="{deal_url}" style="background-color: #0f172a; color: #ffffff; padding: 11px 24px; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 600; display: inline-block; letter-spacing: 0.3px;">
                 Open Deal in AgroCRM ➔
               </a>
             </div>
-
-            <!-- Formal Sign-off -->
             <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid #e2e8f0;">
               <tr>
                 <td>
@@ -881,8 +911,6 @@ def format_stage_change_html(app_base_url, deal_id, deal_title, from_stage, to_s
             </table>
           </td>
         </tr>
-
-        <!-- Footer & Disclaimer -->
         <tr>
           <td style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 32px; font-size: 11px; color: #94a3b8; line-height: 1.55;">
             <strong style="color: #64748b;">Confidentiality & Compliance Notice:</strong> This automated notification is transmitted exclusively for authorized recipients within the sales hierarchy of AgroCRM. If you have received this communication in error, please disregard and notify the system administrator.
@@ -910,7 +938,6 @@ def format_entity_change_html(app_base_url, doctype, docname, action, title=None
     return f"""
     <div style="background-color: #f8fafc; padding: 24px 12px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; min-height: 100%;">
       <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 640px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
-        <!-- Header -->
         <tr>
           <td style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 28px 32px; border-bottom: 3px solid #0284c7;">
             <table border="0" cellpadding="0" cellspacing="0" width="100%">
@@ -927,18 +954,13 @@ def format_entity_change_html(app_base_url, doctype, docname, action, title=None
             </table>
           </td>
         </tr>
-
-        <!-- Body -->
         <tr>
           <td style="padding: 28px 32px;">
             <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.6; color: #1e293b; font-weight: 600;">Dear Commercial Stakeholder,</p>
             <p style="margin: 0 0 20px; font-size: 13.5px; line-height: 1.65; color: #334155;">
               This formal notification confirms an administrative or operational event recorded for <strong>{escape_html(doctype)}</strong> ({escape_html(docname)}) within the AgroCRM enterprise environment. Complete transaction attributes are detailed below.
             </p>
-
             {summary_banner}
-
-            <!-- Details Table -->
             <div style="margin-bottom: 24px;">
               <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #64748b; margin-bottom: 8px;">Record Attributes</div>
               <table style="width: 100%; border-collapse: collapse; font-size: 13px; border: 1px solid #f1f5f9; border-radius: 6px; overflow: hidden;">
@@ -963,15 +985,11 @@ def format_entity_change_html(app_base_url, doctype, docname, action, title=None
                 </tr>
               </table>
             </div>
-
-            <!-- Button -->
             <div style="text-align: center; margin: 28px 0 20px;">
               <a href="{record_url}" style="background-color: #0f172a; color: #ffffff; padding: 11px 24px; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 600; display: inline-block; letter-spacing: 0.3px;">
                 Open {escape_html(doctype)} in AgroCRM ➔
               </a>
             </div>
-
-            <!-- Formal Sign-off -->
             <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid #e2e8f0;">
               <tr>
                 <td>
@@ -983,8 +1001,6 @@ def format_entity_change_html(app_base_url, doctype, docname, action, title=None
             </table>
           </td>
         </tr>
-
-        <!-- Footer -->
         <tr>
           <td style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 32px; font-size: 11px; color: #94a3b8; line-height: 1.55;">
             <strong style="color: #64748b;">Confidentiality & Compliance Notice:</strong> This automated notification is transmitted exclusively for authorized recipients within the sales hierarchy of AgroCRM. If you have received this communication in error, please disregard and notify the system administrator.
@@ -996,184 +1012,215 @@ def format_entity_change_html(app_base_url, doctype, docname, action, title=None
 
 
 # ─────────────────────────────────────────────
-# HOOKS & DISPATCH LOGIC
+# PER-USER DISPATCH & QUEUE PROCESSING
 # ─────────────────────────────────────────────
 
-def dispatch_or_queue_notification(recipients, subject, content, reference_doctype, reference_name):
+def dispatch_user_notifications(deliveries, subject, content, reference_doctype, reference_name):
     """
-    Decides whether to dispatch immediately or buffer into CRM Pending Notification.
-    Instant mode: sends immediately.
-    Scheduled or Periodic Interval: buffers into pending queue.
+    Dispatch or queue notifications independently per user based on each user's
+    personal delivery_mode (`instant`, `scheduled`, or `interval`).
     """
-    if not recipients:
+    if not deliveries:
         return
 
-    settings = get_notification_settings_doc()
-    delivery_mode, scheduled_time, interval_minutes = get_delivery_config(settings)
+    instant_emails = []
+    instant_seen = set()
 
-    if delivery_mode == "instant":
-        _enqueue_mail(recipients, subject, content, reference_doctype, reference_name)
-    else:
-        try:
-            recips_str = ", ".join(recipients) if isinstance(recipients, list) else str(recipients)
-            pending = frappe.get_doc({
-                "doctype": "CRM Pending Notification",
-                "status": "Pending",
-                "reference_doctype": reference_doctype,
-                "reference_name": reference_name,
-                "recipients": recips_str,
-                "subject": subject,
-                "content": content
-            })
-            pending.insert(ignore_permissions=True)
-            frappe.db.commit()
-        except Exception as e:
-            frappe.log_error(frappe.get_traceback(), f"dispatch_or_queue_notification buffer error: {str(e)}")
-            _enqueue_mail(recipients, subject, content, reference_doctype, reference_name)
+    for delivery in deliveries:
+        mode = delivery.get("delivery_mode", "instant")
+        emails = delivery.get("emails") or []
+        if not emails:
+            continue
+
+        if mode == "instant":
+            for em in emails:
+                if em not in instant_seen:
+                    instant_seen.add(em)
+                    instant_emails.append(em)
+        else:
+            if not frappe.db.exists("DocType", "CRM Pending Notification"):
+                for em in emails:
+                    if em not in instant_seen:
+                        instant_seen.add(em)
+                        instant_emails.append(em)
+                continue
+
+            try:
+                has_recipient_user = frappe.get_meta("CRM Pending Notification").has_field("recipient_user")
+                has_delivery_mode = frappe.get_meta("CRM Pending Notification").has_field("delivery_mode")
+
+                doc_dict = {
+                    "doctype": "CRM Pending Notification",
+                    "status": "Pending",
+                    "reference_doctype": reference_doctype,
+                    "reference_name": reference_name,
+                    "recipients": ", ".join(emails),
+                    "subject": subject,
+                    "content": content,
+                }
+                if has_recipient_user:
+                    doc_dict["recipient_user"] = delivery["user"]
+                if has_delivery_mode:
+                    doc_dict["delivery_mode"] = mode
+
+                pending = frappe.get_doc(doc_dict)
+                pending.insert(ignore_permissions=True)
+                frappe.db.commit()
+            except Exception as e:
+                frappe.log_error(frappe.get_traceback(), f"dispatch_user_notifications buffer error: {str(e)}")
+                for em in emails:
+                    if em not in instant_seen:
+                        instant_seen.add(em)
+                        instant_emails.append(em)
+
+    if instant_emails:
+        _enqueue_mail(instant_emails, subject, content, reference_doctype, reference_name)
 
 
 @frappe.whitelist()
 def process_notification_queue():
     """
     Triggered every minute by cron '* * * * *'.
-    Evaluates whether daily scheduled time has arrived or periodic interval has elapsed,
-    and dispatches all pending notifications.
-    Can also be manually triggered by System Managers.
+    Evaluates each user's pending CRM Pending Notification items against THAT user's
+    personal delivery_mode, scheduled_time, interval_minutes, and last_dispatched timestamp.
     """
     try:
         settings = get_notification_settings_doc()
         if not settings or not settings.enabled:
             return {"dispatched": 0, "status": "disabled"}
 
-        delivery_mode, scheduled_time, interval_minutes = get_delivery_config(settings)
-        if delivery_mode == "instant":
-            return {"dispatched": 0, "status": "instant_mode"}
-
-        now = now_datetime()
-        today = frappe.utils.getdate(now)
-        should_send = False
-
-        if delivery_mode == "scheduled":
-            # Daily Scheduled Time evaluation (from notification_templates pattern)
-            target = _get_target_time(now, scheduled_time)
-            raw_last_run = getattr(settings, "last_dispatched", None)
-
-            already_sent_today = False
-            if raw_last_run:
-                last_run = frappe.utils.get_datetime(raw_last_run)
-                already_sent_today = (frappe.utils.getdate(last_run) == today and last_run >= target)
-
-            if now >= target and not already_sent_today:
-                should_send = True
-
-        elif delivery_mode == "interval":
-            # Periodic Interval evaluation (from notification_templates pattern)
-            interval_delta = timedelta(minutes=interval_minutes)
-            raw_last_run = getattr(settings, "last_dispatched", None)
-
-            if not raw_last_run:
-                should_send = True
-            else:
-                last_run = frappe.utils.get_datetime(raw_last_run)
-                if (now - last_run) >= interval_delta:
-                    should_send = True
-
-        if not should_send:
-            return {"dispatched": 0, "status": "not_due"}
-
-        # Fetch pending notifications
         if not frappe.db.exists("DocType", "CRM Pending Notification"):
             return {"dispatched": 0, "status": "no_pending_doctype"}
+
+        has_recipient_user = frappe.get_meta("CRM Pending Notification").has_field("recipient_user")
+        fields = ["name", "recipients", "subject", "content", "reference_doctype", "reference_name"]
+        if has_recipient_user:
+            fields.append("recipient_user")
 
         pending_records = frappe.get_all(
             "CRM Pending Notification",
             filters={"status": "Pending"},
-            fields=["name", "recipients", "subject", "content", "reference_doctype", "reference_name"],
+            fields=fields,
             order_by="creation asc",
-            limit=200
+            limit=500,
         )
 
         if not pending_records:
-            frappe.db.set_single_value("CRM Notification Settings", "last_dispatched", now, update_modified=False)
             return {"dispatched": 0, "status": "empty_queue"}
 
-        dispatched_count = 0
-        for item in pending_records:
-            recips = [r.strip() for r in item.recipients.split(",") if r.strip()]
-            _enqueue_mail(
-                recipients=recips,
-                subject=item.subject,
-                content=item.content,
-                reference_doctype=item.reference_doctype,
-                reference_name=item.reference_name
-            )
-            frappe.db.set_value("CRM Pending Notification", item.name, "status", "Dispatched")
-            dispatched_count += 1
+        now = now_datetime()
+        today = frappe.utils.getdate(now)
 
-        frappe.db.set_single_value("CRM Notification Settings", "last_dispatched", now, update_modified=False)
+        # Group pending records by recipient_user (or '' for legacy rows)
+        by_user = {}
+        for item in pending_records:
+            rec_user = (item.get("recipient_user") or "").strip()
+            by_user.setdefault(rec_user, []).append(item)
+
+        dispatched_count = 0
+        cancelled_count = 0
+
+        for rec_user, items in by_user.items():
+            user_row = _find_user_setting_row(settings, rec_user) if rec_user else None
+
+            if user_row and not getattr(user_row, "enabled", 1):
+                for item in items:
+                    frappe.db.set_value("CRM Pending Notification", item.name, "status", "Cancelled")
+                    cancelled_count += 1
+                continue
+
+            if not user_row:
+                # Legacy row or user row removed -> flush immediately so it isn't orphaned
+                should_send = True
+                delivery_mode = "instant"
+            else:
+                delivery_mode = _normalize_delivery_mode(getattr(user_row, "delivery_mode", "Instant"))
+                scheduled_time = _normalize_scheduled_time(getattr(user_row, "scheduled_time", "09:00"))
+                interval_minutes = int(getattr(user_row, "interval_minutes", 60) or 60)
+                raw_last_run = getattr(user_row, "last_dispatched", None)
+                should_send = False
+
+                if delivery_mode == "instant":
+                    # User switched back to instant -> deliver queued items immediately
+                    should_send = True
+                elif delivery_mode == "scheduled":
+                    target = _get_target_time(now, scheduled_time)
+                    already_sent_today = False
+                    if raw_last_run:
+                        last_run = frappe.utils.get_datetime(raw_last_run)
+                        already_sent_today = (frappe.utils.getdate(last_run) == today and last_run >= target)
+                    if now >= target and not already_sent_today:
+                        should_send = True
+                elif delivery_mode == "interval":
+                    if not raw_last_run:
+                        should_send = True
+                    else:
+                        last_run = frappe.utils.get_datetime(raw_last_run)
+                        if (now - last_run) >= timedelta(minutes=interval_minutes):
+                            should_send = True
+
+            if not should_send:
+                continue
+
+            # Resolve latest personal emails if user_row exists, otherwise fallback to stored recipients
+            current_user_emails = (
+                _extract_valid_emails(
+                    getattr(user_row, "email", None),
+                    getattr(user_row, "alternate_email", None),
+                )
+                if user_row
+                else []
+            )
+
+            for item in items:
+                recips = current_user_emails or [r.strip() for r in (item.recipients or "").split(",") if r.strip()]
+                if recips:
+                    _enqueue_mail(
+                        recipients=recips,
+                        subject=item.subject,
+                        content=item.content,
+                        reference_doctype=item.reference_doctype,
+                        reference_name=item.reference_name,
+                    )
+                    frappe.db.set_value("CRM Pending Notification", item.name, "status", "Dispatched")
+                    dispatched_count += 1
+                else:
+                    frappe.db.set_value("CRM Pending Notification", item.name, "status", "Cancelled")
+                    cancelled_count += 1
+
+            if user_row and getattr(user_row, "name", None):
+                if frappe.get_meta("CRM User Notification Setting").has_field("last_dispatched"):
+                    frappe.db.set_value(
+                        "CRM User Notification Setting",
+                        user_row.name,
+                        "last_dispatched",
+                        now,
+                        update_modified=False,
+                    )
+
         frappe.db.commit()
-        return {"dispatched": dispatched_count, "status": "success"}
+        return {
+            "dispatched": dispatched_count,
+            "cancelled": cancelled_count,
+            "status": "success" if dispatched_count > 0 else "not_due",
+        }
 
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), f"process_notification_queue error: {str(e)}")
         return {"dispatched": 0, "status": "error", "error": str(e)}
 
 
-@frappe.whitelist()
-def get_queue_status():
-    """
-    Return current queue status, delivery mode, pending count, and recent email dispatches.
-    Accessible to authenticated users.
-    """
-    if frappe.session.user == "Guest":
-        frappe.throw(_("Authentication required."), frappe.PermissionError)
-
-    settings = get_notification_settings_doc()
-    delivery_mode, scheduled_time, interval_minutes = get_delivery_config(settings)
-
-    pending_count = 0
-    dispatched_count = 0
-    pending_items = []
-
-    if frappe.db.exists("DocType", "CRM Pending Notification"):
-        pending_count = frappe.db.count("CRM Pending Notification", {"status": "Pending"})
-        dispatched_count = frappe.db.count("CRM Pending Notification", {"status": "Dispatched"})
-        pending_items = frappe.get_all(
-            "CRM Pending Notification",
-            fields=["name", "status", "reference_doctype", "reference_name", "recipients", "subject", "creation"],
-            order_by="creation desc",
-            limit=10
-        )
-
-    # Also inspect recent Frappe Email Queue
-    recent_emails = []
-    if frappe.db.exists("DocType", "Email Queue"):
-        recent_emails = frappe.get_all(
-            "Email Queue",
-            fields=["name", "status", "sender", "creation", "modified"],
-            order_by="creation desc",
-            limit=5
-        )
-
-    return {
-        "delivery_mode": delivery_mode,
-        "scheduled_time": scheduled_time,
-        "interval_minutes": interval_minutes,
-        "last_dispatched": str(getattr(settings, "last_dispatched", None) or ""),
-        "pending_count": pending_count,
-        "dispatched_count": dispatched_count,
-        "pending_items": pending_items,
-        "recent_emails": recent_emails,
-    }
-
+# ─────────────────────────────────────────────
+# HOOKS & DISPATCH LOGIC
+# ─────────────────────────────────────────────
 
 def on_change(doc, method=None):
     """
     Unified doc_events hook handler for CRM records.
-    Never blocks saving, safe against loops and bulk syncs.
+    Uses System Hierarchy strictly for recipient tree resolution, and evaluates
+    each user's personal preferences (events, own actions, emails, delivery timing) independently.
     """
     try:
-        # Loop & bulk import guards
         if (
             getattr(frappe.flags, "in_import", False)
             or getattr(frappe.flags, "in_migrate", False)
@@ -1189,49 +1236,37 @@ def on_change(doc, method=None):
 
         doctype = doc.doctype
         actor_user = doc.modified_by or doc.owner or frappe.session.user
+        app_base_url = DEFAULT_APP_BASE_URL
 
-        # Ignore automated system changes
-        if actor_user in ["Administrator", "Guest"] and not settings.include_actor:
-            # Still process if administrator is explicitly mapped in hierarchy
-            pass
-
-        app_base_url = settings.app_base_url or "https://pipedrive-crm.usman-agro7c.workers.dev"
+        candidates = resolve_hierarchy_candidates(actor_user, settings)
+        if not candidates:
+            return
 
         if doctype == "CRM Deal":
-            # CRM Deal has no 'deal_title' field — use organization_name or name as label
             deal_label = getattr(doc, "organization_name", None) or getattr(doc, "organization", None) or doc.name
-            # Correct field names: deal_value (not annual_revenue), expected_closure_date (not expected_closing_date)
             deal_value = getattr(doc, "deal_value", None) or getattr(doc, "annual_revenue", None) or 0
 
             if method == "after_insert":
-                if not settings.deal_updates:
-                    return
-                recipients = resolve_recipients(actor_user, settings)
-                recipients = filter_recipients_by_user_preferences(recipients, "deal_updates", actor_user, settings)
-                if not recipients:
+                deliveries = evaluate_user_deliveries(candidates, "deal_updates", settings)
+                if not deliveries:
                     return
                 subject = f"[New Deal Pipeline] Deal \"{deal_label}\" Initialized ({doc.name})"
                 content = format_entity_change_html(
                     app_base_url, doctype, doc.name, "Created",
                     title=deal_label,
                     details={"Stage": doc.status, "Deal Value": f"PKR {deal_value:,.2f}" if deal_value else "0", "Organization": doc.organization},
-                    modified_by=actor_user
+                    modified_by=actor_user,
                 )
-                dispatch_or_queue_notification(recipients, subject, content, doctype, doc.name)
+                dispatch_user_notifications(deliveries, subject, content, doctype, doc.name)
 
             elif method == "on_update":
-                has_stage_changed = doc.has_value_changed("status")
-                if has_stage_changed:
-                    if not settings.deal_stage_change:
+                if doc.has_value_changed("status"):
+                    deliveries = evaluate_user_deliveries(candidates, "deal_stage_change", settings)
+                    if not deliveries:
                         return
                     prev_doc = doc.get_doc_before_save()
                     from_stage = prev_doc.status if prev_doc else ""
                     to_stage = doc.status
-
-                    recipients = resolve_recipients(actor_user, settings)
-                    recipients = filter_recipients_by_user_preferences(recipients, "deal_stage_change", actor_user, settings)
-                    if not recipients:
-                        return
 
                     stage_lower = str(to_stage or "").strip().lower()
                     if "won" in stage_lower:
@@ -1243,37 +1278,30 @@ def on_change(doc, method=None):
 
                     content = format_stage_change_html(
                         app_base_url, doc.name, deal_label,
-                        from_stage, to_stage, doc.organization, deal_value, actor_user
+                        from_stage, to_stage, doc.organization, deal_value, actor_user,
                     )
-                    dispatch_or_queue_notification(recipients, subject, content, doctype, doc.name)
+                    dispatch_user_notifications(deliveries, subject, content, doctype, doc.name)
                 else:
-                    if not settings.deal_updates:
-                        return
-                    # Check if meaningful fields changed (using correct field names)
                     meaningful = ["deal_value", "organization", "lead", "probability", "expected_closure_date", "organization_name"]
                     changed = [f for f in meaningful if doc.has_value_changed(f)]
                     if not changed:
                         return
 
-                    recipients = resolve_recipients(actor_user, settings)
-                    recipients = filter_recipients_by_user_preferences(recipients, "deal_updates", actor_user, settings)
-                    if not recipients:
+                    deliveries = evaluate_user_deliveries(candidates, "deal_updates", settings)
+                    if not deliveries:
                         return
 
                     changed_details = {doc.meta.get_label(f) or f: getattr(doc, f) for f in changed}
                     subject = f"[Deal Record Update] Deal \"{deal_label}\" Attributes Modified ({doc.name})"
                     content = format_entity_change_html(
                         app_base_url, doctype, doc.name, "Updated",
-                        title=deal_label, details=changed_details, modified_by=actor_user
+                        title=deal_label, details=changed_details, modified_by=actor_user,
                     )
-                    dispatch_or_queue_notification(recipients, subject, content, doctype, doc.name)
+                    dispatch_user_notifications(deliveries, subject, content, doctype, doc.name)
 
         elif doctype == "CRM Lead":
-            if not settings.leads:
-                return
-            recipients = resolve_recipients(actor_user, settings)
-            recipients = filter_recipients_by_user_preferences(recipients, "leads", actor_user, settings)
-            if not recipients:
+            deliveries = evaluate_user_deliveries(candidates, "leads", settings)
+            if not deliveries:
                 return
 
             lead_name = f"{doc.first_name or ''} {doc.last_name or ''}".strip() or doc.name
@@ -1293,7 +1321,7 @@ def on_change(doc, method=None):
                     "Updated Status": to_status,
                     "Organization": doc.organization,
                     "Email": doc.email,
-                    "Mobile": doc.mobile_no
+                    "Mobile": doc.mobile_no,
                 }
             else:
                 action = "Updated"
@@ -1304,16 +1332,13 @@ def on_change(doc, method=None):
                 app_base_url, doctype, doc.name, action,
                 title=lead_name,
                 details=details,
-                modified_by=actor_user
+                modified_by=actor_user,
             )
-            dispatch_or_queue_notification(recipients, subject, content, doctype, doc.name)
+            dispatch_user_notifications(deliveries, subject, content, doctype, doc.name)
 
         elif doctype == "CRM Task":
-            if not settings.tasks:
-                return
-            recipients = resolve_recipients(actor_user, settings)
-            recipients = filter_recipients_by_user_preferences(recipients, "tasks", actor_user, settings)
-            if not recipients:
+            deliveries = evaluate_user_deliveries(candidates, "tasks", settings)
+            if not deliveries:
                 return
 
             if method == "after_insert":
@@ -1330,16 +1355,13 @@ def on_change(doc, method=None):
                 app_base_url, doctype, doc.name, action,
                 title=doc.title,
                 details={"Status": doc.status, "Priority": doc.priority, "Due Date": str(doc.due_date or "")},
-                modified_by=actor_user
+                modified_by=actor_user,
             )
-            dispatch_or_queue_notification(recipients, subject, content, doctype, doc.name)
+            dispatch_user_notifications(deliveries, subject, content, doctype, doc.name)
 
         elif doctype in ["CRM Organization", "Contact"]:
-            if not settings.other_records:
-                return
-            recipients = resolve_recipients(actor_user, settings)
-            recipients = filter_recipients_by_user_preferences(recipients, "other_records", actor_user, settings)
-            if not recipients:
+            deliveries = evaluate_user_deliveries(candidates, "other_records", settings)
+            if not deliveries:
                 return
 
             action = "Created" if method == "after_insert" else "Updated"
@@ -1347,9 +1369,9 @@ def on_change(doc, method=None):
             subject = f"[AgroCRM Alert] {doctype} \"{title or doc.name}\" was {action}"
             content = format_entity_change_html(
                 app_base_url, doctype, doc.name, action,
-                title=title, modified_by=actor_user
+                title=title, modified_by=actor_user,
             )
-            dispatch_or_queue_notification(recipients, subject, content, doctype, doc.name)
+            dispatch_user_notifications(deliveries, subject, content, doctype, doc.name)
 
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), f"Hierarchy notify on_change failed: {str(e)}")
@@ -1364,32 +1386,27 @@ def notify_entity(doctype, docname, action, details=None, crm_deal=None, actor_u
         if not settings or not settings.enabled:
             return
 
-        if doctype == "Quotation" and not settings.quotations:
-            return
-        if doctype == "Sales Order" and not settings.sales_orders:
-            return
-
-        # For external webhook events, actor is unknown on the CRM site.
-        # If mode is Selected Nodes, recipients do not depend on actor.
-        # Otherwise, resolve using the owner of the linked CRM Deal.
         effective_actor = actor_user
         if not effective_actor and crm_deal and frappe.db.exists("CRM Deal", crm_deal):
             effective_actor = frappe.db.get_value("CRM Deal", crm_deal, "owner")
 
-        recipients = resolve_recipients(effective_actor, settings)
-        event_key = "quotations" if doctype == "Quotation" else ("sales_orders" if doctype == "Sales Order" else "other_records")
-        recipients = filter_recipients_by_user_preferences(recipients, event_key, effective_actor, settings)
-        if not recipients:
+        candidates = resolve_hierarchy_candidates(effective_actor, settings)
+        if not candidates:
             return
 
-        app_base_url = settings.app_base_url or "https://pipedrive-crm.usman-agro7c.workers.dev"
+        event_key = "quotations" if doctype == "Quotation" else ("sales_orders" if doctype == "Sales Order" else "other_records")
+        deliveries = evaluate_user_deliveries(candidates, event_key, settings)
+        if not deliveries:
+            return
+
+        app_base_url = DEFAULT_APP_BASE_URL
         subject = f"[AgroCRM Alert] {doctype} \"{docname}\" was {action}"
         content = format_entity_change_html(
             app_base_url, doctype, docname, action,
-            title=docname, details=details, modified_by=effective_actor or "ERPNext Webhook"
+            title=docname, details=details, modified_by=effective_actor or "ERPNext Webhook",
         )
 
-        dispatch_or_queue_notification(recipients, subject, content, doctype, docname)
+        dispatch_user_notifications(deliveries, subject, content, doctype, docname)
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), f"notify_entity failed for {doctype} {docname}: {str(e)}")
 
@@ -1406,5 +1423,5 @@ def _enqueue_mail(recipients, subject, content, reference_doctype, reference_nam
         subject=subject,
         message=content,
         reference_doctype=reference_doctype,
-        reference_name=reference_name
+        reference_name=reference_name,
     )
